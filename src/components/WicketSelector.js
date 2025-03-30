@@ -1,22 +1,30 @@
-'use client';
-import { useState } from 'react';
-import { realtime, dbPaths } from '@/lib/firebase/client';
+"use client";
+import { useState } from "react";
+import { db } from "@/lib/firebase"; // Import db from your Firebase config
+import { ref, push, update } from "firebase/database"; // Import ref, push, update from firebase/database
 
-const WICKET_TYPES = ['Bowled', 'Caught', 'LBW', 'Run Out', 'Stumped'];
+const WICKET_TYPES = ["Bowled", "Caught", "LBW", "Run Out", "Stumped"];
 
 export const WicketSelector = ({ matchId }) => {
   const [isOpen, setIsOpen] = useState(false);
 
   const recordWicket = async (type) => {
-    await realtime.update(dbPaths.ballHistory(matchId), {
-      [push().key]: { wicket: type, timestamp: Date.now() }
+    if (!matchId) return;
+
+    const historyRef = ref(db, `matches/${matchId}/ballHistory`);
+    const newWicketRef = push(historyRef); // Generate a unique key
+
+    await update(newWicketRef, {
+      wicket: type,
+      timestamp: Date.now(),
     });
+
     setIsOpen(false);
   };
 
   return (
     <div className="mt-4">
-      <button 
+      <button
         onClick={() => setIsOpen(true)}
         className="p-2 bg-red-500 text-white rounded"
       >

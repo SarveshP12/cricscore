@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { firestoreDB } from "@/lib/firebase";
 import { collection, query, onSnapshot } from "firebase/firestore";
 import { useRouter } from "next/navigation";
-import MatchCard from "@/components/MatchCard"; // Importing MatchCard
+import MatchCard from "@/components/HostCard"; // Importing MatchCard
 
 export default function MatchList() {
   const [matches, setMatches] = useState([]);

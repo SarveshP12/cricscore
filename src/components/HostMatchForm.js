@@ -131,6 +131,7 @@ export default function HostMatchForm() {
         {formData.matchType === "Casual" && (
           <input type="number" name="casualOvers" placeholder="Number of Overs" value={formData.casualOvers} onChange={handleChange} className="p-2 border rounded" required />
         )}
+        <input type="text" name="location" placeholder="Match Location" value={formData.location} onChange={handleChange} className="p-2 border rounded" required />
         <input type="date" name="matchDate" value={formData.matchDate} onChange={handleChange} className="p-2 border rounded" required />
         <input type="time" name="matchTime" value={formData.matchTime} onChange={handleChange} className="p-2 border rounded" required />
         <input type="file" accept=".xlsx, .xls" onChange={handleFileUpload} className="col-span-2 p-2 border rounded" />
