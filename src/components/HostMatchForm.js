@@ -59,8 +59,20 @@ export default function HostMatchForm() {
         if (jsonData.length > 1) {
           const teamA = jsonData[0][0] || "Team A";
           const teamB = jsonData[0][1] || "Team B";
-          const playerListA = jsonData.slice(1).map((row) => row[0]).filter(Boolean);
-          const playerListB = jsonData.slice(1).map((row) => row[1]).filter(Boolean);
+          const playerListA = jsonData.slice(1).map((row) => ({
+            id: `player_${Math.random().toString(36).substr(2, 9)}`,
+            name: row[0] || "",
+            battingStyle: row[2] || "Right-handed",
+            bowlingStyle: row[3] || "Right-arm medium",
+            role: row[4] || "Player"
+          })).filter(player => player.name);
+          const playerListB = jsonData.slice(1).map((row) => ({
+            id: `player_${Math.random().toString(36).substr(2, 9)}`,
+            name: row[1] || "",
+            battingStyle: row[2] || "Right-handed",
+            bowlingStyle: row[3] || "Right-arm medium",
+            role: row[4] || "Player"
+          })).filter(player => player.name);
           setFormData((prev) => ({ ...prev, teamA, teamB, playerListA, playerListB }));
         }
       } catch (err) {
@@ -87,7 +99,7 @@ export default function HostMatchForm() {
     }
   
     try {
-      // Prepare match data for Firestore
+      // 1. Create match in Firestore (for structured data and querying)
       const matchData = {
         matchName: formData.matchName,
         matchType: formData.matchType,
@@ -97,40 +109,166 @@ export default function HostMatchForm() {
         teamA: formData.teamA,
         teamB: formData.teamB,
         totalOvers: formData.casualOvers,
-        playerListA: formData.playerListA,
-        playerListB: formData.playerListB,
         status: "upcoming",
         createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       };
 
-      // 1. Add to Firestore (for structured data and querying)
       const matchRef = await addDoc(collection(firestoreDB, "matches"), matchData);
       const matchId = matchRef.id;
 
-      // 2. Add to Realtime Database (for live score updates)
+      // 2. Create comprehensive match structure in Realtime Database
       const realtimeMatchData = {
-        matchDetails: matchData,
-        playerStats: {
-          teamA: {},
-          teamB: {}
+        // Match metadata
+        matchDetails: {
+          ...matchData,
+          id: matchId,
+          createdAt: Date.now(),
         },
-        score: {
-          teamA: { runs: 0, wickets: 0, balls: 0 },
-          teamB: { runs: 0, wickets: 0, balls: 0 },
+        
+        // Teams and players
+        teams: {
+          teamA: {
+            name: formData.teamA,
+            players: formData.playerListA.reduce((acc, player) => {
+              acc[player.id] = player;
+              return acc;
+            }, {})
+          },
+          teamB: {
+            name: formData.teamB,
+            players: formData.playerListB.reduce((acc, player) => {
+              acc[player.id] = player;
+              return acc;
+            }, {})
+          }
         },
+        
+        // Match state
         currentInnings: 1,
         currentOver: 0,
         currentBall: 0,
         status: "upcoming",
+        
+        // Score tracking
+        score: {
+          teamA: { 
+            runs: 0, 
+            wickets: 0, 
+            overs: 0,
+            balls: 0,
+            extras: { wides: 0, noballs: 0, byes: 0, legbyes: 0 }
+          },
+          teamB: { 
+            runs: 0, 
+            wickets: 0, 
+            overs: 0,
+            balls: 0,
+            extras: { wides: 0, noballs: 0, byes: 0, legbyes: 0 }
+          },
+        },
+        
+        // Innings data
+        innings: {
+          1: {
+            battingTeam: "teamA",
+            bowlingTeam: "teamB",
+            startedAt: null,
+            endedAt: null,
+            status: "not_started",
+            score: 0,
+            wickets: 0,
+            overs: 0,
+            balls: [],
+            currentBatsmen: {
+              striker: null,
+              nonStriker: null
+            },
+            currentBowler: null
+          },
+          2: {
+            battingTeam: "teamB",
+            bowlingTeam: "teamA",
+            startedAt: null,
+            endedAt: null,
+            status: "not_started",
+            score: 0,
+            wickets: 0,
+            overs: 0,
+            balls: [],
+            currentBatsmen: {
+              striker: null,
+              nonStriker: null
+            },
+            currentBowler: null
+          }
+        },
+        
+        // Player statistics
+        playerStats: {
+          teamA: formData.playerListA.reduce((acc, player) => {
+            acc[player.id] = {
+              batting: {
+                runs: 0,
+                balls: 0,
+                fours: 0,
+                sixes: 0,
+                strikeRate: 0,
+                status: "not_out"
+              },
+              bowling: {
+                overs: 0,
+                maidens: 0,
+                runs: 0,
+                wickets: 0,
+                economy: 0
+              },
+              fielding: {
+                catches: 0,
+                runouts: 0,
+                stumpings: 0
+              }
+            };
+            return acc;
+          }, {}),
+          teamB: formData.playerListB.reduce((acc, player) => {
+            acc[player.id] = {
+              batting: {
+                runs: 0,
+                balls: 0,
+                fours: 0,
+                sixes: 0,
+                strikeRate: 0,
+                status: "not_out"
+              },
+              bowling: {
+                overs: 0,
+                maidens: 0,
+                runs: 0,
+                wickets: 0,
+                economy: 0
+              },
+              fielding: {
+                catches: 0,
+                runouts: 0,
+                stumpings: 0
+              }
+            };
+            return acc;
+          }, {})
+        },
+        
+        // Match events log
+        events: []
       };
 
       await set(ref(db, `matches/${matchId}`), realtimeMatchData);
 
-      setSuccessMessage("Match successfully created in both databases!");
+      setSuccessMessage("Match successfully created with comprehensive structure!");
       setTimeout(() => router.push(`/score-match/${matchId}`), 2000);
     } catch (err) {
-      console.error("Error storing data:", err);
-      setError("Error storing data. Please try again.");
+      console.error("Error creating match:", err);
+      setError("Error creating match. Please try again.");
       setIsSubmitting(false);
     }
   };
@@ -156,8 +294,16 @@ export default function HostMatchForm() {
         <input type="text" name="location" placeholder="Match Location" value={formData.location} onChange={handleChange} className="p-2 border rounded" required />
         <input type="date" name="matchDate" value={formData.matchDate} onChange={handleChange} className="p-2 border rounded" required />
         <input type="time" name="matchTime" value={formData.matchTime} onChange={handleChange} className="p-2 border rounded" required />
-        <input type="file" accept=".xlsx, .xls" onChange={handleFileUpload} className="col-span-2 p-2 border rounded" />
-        {formData.uploadedFileName && <p className="col-span-2 text-center">{formData.uploadedFileName} <button type="button" onClick={removeFile} className="text-red-500 ml-2">✖</button></p>}
+        <div className="col-span-2">
+          <label className="block mb-1">Upload Teams Excel (Column A: Team A Players, Column B: Team B Players)</label>
+          <input type="file" accept=".xlsx, .xls" onChange={handleFileUpload} className="w-full p-2 border rounded" />
+          {formData.uploadedFileName && (
+            <div className="flex items-center mt-2">
+              <span className="text-sm">{formData.uploadedFileName}</span>
+              <button type="button" onClick={removeFile} className="ml-2 text-red-500">✖</button>
+            </div>
+          )}
+        </div>
         <button 
           type="submit" 
           className="col-span-2 bg-blue-500 text-white p-2 rounded hover:bg-blue-600 transition-colors"

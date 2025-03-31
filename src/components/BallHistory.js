@@ -1,46 +1,70 @@
 "use client";
-import { useEffect, useState } from 'react';
-import { ref, onValue } from 'firebase/database';
-import { db } from '@/lib/firebase';
+import { useEffect, useState } from "react";
+import { ref, onValue } from "firebase/database";
+import { db } from "@/lib/firebase";
 
-export default function BallHistory({ matchId }) {
-  const [history, setHistory] = useState([]);
+export default function BallHistory({ matchId, inningsNumber }) {
+  const [balls, setBalls] = useState([]);
 
   useEffect(() => {
-    if (!matchId) return;
-    
-    const historyRef = ref(db, `matches/${matchId}/ballHistory`);
-    onValue(historyRef, (snapshot) => {
-      const data = snapshot.val() || [];
-      // Convert object to array if needed
-      const historyArray = Array.isArray(data) ? data : Object.values(data);
-      setHistory(historyArray.reverse());
-    });
-  }, [matchId]);
+    if (!matchId || !inningsNumber) return;
 
-  const formatBall = (ball) => {
-    if (ball.isWicket) return 'W';
-    if (ball.extraType === 'wide') return `${ball.runs + 1}wd`;
-    if (ball.extraType === 'noball') return `${ball.runs + 1}nb`;
-    return ball.runs;
+    const ballsRef = ref(db, `matches/${matchId}/innings/${inningsNumber}/balls`);
+    const unsubscribe = onValue(ballsRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const ballsData = snapshot.val();
+        const ballsArray = Object.entries(ballsData)
+          .map(([id, ball]) => ({
+            id,
+            ...ball,
+          }))
+          .sort((a, b) => b.timestamp - a.timestamp); // Newest first
+        setBalls(ballsArray);
+      } else {
+        setBalls([]);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [matchId, inningsNumber]);
+
+  const getBallDescription = (ball) => {
+    let description = `${ball.ballNumber}: ${ball.bowler} to ${ball.batsman} - `;
+    
+    if (ball.wicket) {
+      description += `Wicket (${ball.wicket.type})`;
+    } else if (ball.runs > 0) {
+      description += `${ball.runs} run${ball.runs > 1 ? 's' : ''}`;
+    } else {
+      description += "Dot ball";
+    }
+
+    if (ball.extras) {
+      const extraTypes = Object.keys(ball.extras);
+      if (extraTypes.length > 0) {
+        description += ` + ${extraTypes.map(et => `${et} (${ball.extras[et]})`).join(', ')}`;
+      }
+    }
+
+    return description;
   };
 
   return (
-    <div className="bg-white p-4 rounded-lg shadow-md">
-      <h2 className="text-xl font-bold mb-4">Ball History</h2>
-      <div className="flex flex-wrap gap-2">
-        {history.map((ball, index) => (
-          <div 
-            key={index} 
-            className={`p-2 rounded-full w-10 h-10 flex items-center justify-center 
-              ${ball.isWicket ? 'bg-red-500 text-white' : 
-                ball.runs === 4 ? 'bg-blue-100 text-blue-800' :
-                ball.runs === 6 ? 'bg-green-100 text-green-800' :
-                'bg-gray-100'}`}
-          >
-            {formatBall(ball)}
-          </div>
-        ))}
+    <div className="bg-white p-4 rounded shadow">
+      <h3 className="font-bold mb-2">Ball History</h3>
+      <div className="space-y-2 max-h-64 overflow-y-auto">
+        {balls.length === 0 ? (
+          <p>No balls recorded yet</p>
+        ) : (
+          balls.map((ball) => (
+            <div 
+              key={ball.id} 
+              className={`border-b pb-2 ${ball.wicket ? 'text-red-500' : ''}`}
+            >
+              <p>{getBallDescription(ball)}</p>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );

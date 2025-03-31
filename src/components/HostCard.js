@@ -1,50 +1,50 @@
-import React, { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+"use client";
+import { useState, useEffect } from "react";
+import { firestoreDB } from "@/lib/firebase"; // Note: using firestoreDB now
+import { doc, getDoc } from "firebase/firestore";
 
-export default function MatchCard({ match }) {
-  const router = useRouter();
-  const [isStarted, setIsStarted] = useState(false);
+export default function MatchCard({ match, onClick }) {
+  const [matchDetails, setMatchDetails] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check if the match is already started
-    const storedMatchStatus = localStorage.getItem(`match_started_${match.id}`);
-    if (storedMatchStatus === "true") {
-      setIsStarted(true);
-    }
+    const fetchMatchDetails = async () => {
+      try {
+        // Create document reference
+        const matchRef = doc(firestoreDB, "matches", match.id);
+        const matchSnap = await getDoc(matchRef);
+        
+        if (matchSnap.exists()) {
+          setMatchDetails(matchSnap.data());
+        }
+      } catch (error) {
+        console.error("Error fetching match details:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchMatchDetails();
   }, [match.id]);
 
-  const handleStartMatch = () => {
-    localStorage.setItem(`match_started_${match.id}`, "true"); // Store match start status
-    setIsStarted(true);
-    router.push(`/score-match/${match.id}`); // Redirect to match scoring page
-  };
+  if (loading) {
+    return (
+      <div className="border rounded-lg p-4 h-40 bg-gray-100 animate-pulse"></div>
+    );
+  }
 
   return (
-    <div className="bg-white p-4 border-4 border-black shadow-[6px_6px_0px_rgba(0,0,0,1)] rounded-lg cursor-pointer hover:shadow-[8px_8px_0px_rgba(0,0,0,1)] transition-all">
-      {/* Match Header */}
-      <div className="flex justify-between items-center mb-2">
-        <span className="text-sm font-semibold">{match.matchType}</span>
-        <span className="bg-gray-800 text-white text-xs font-bold px-2 py-1 rounded-full">
-          {match.casualOvers} Overs
-        </span>
-      </div>
-
-      {/* Match Name */}
-      <h3 className="text-xl font-bold mb-2">🏏 {match.matchName}</h3>
-
-      {/* Location */}
-      <p className="text-sm text-gray-600 mb-1">📍 {match.location}</p>
-
-      {/* Match Date & Time */}
-      <p className="text-sm text-gray-500">📅 {match.matchDate} | ⏰ {match.matchTime}</p>
-
-      {/* Start/Resume Match Button */}
-      <button
-        onClick={handleStartMatch}
-        className="mt-3 px-4 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition-all w-full"
-      >
-        {isStarted ? "Resume Match" : "Start Match"}
-      </button>
+    <div 
+      className="border rounded-lg p-4 cursor-pointer hover:bg-gray-50 transition-colors"
+      onClick={onClick}
+    >
+      <h3 className="font-bold text-lg">{match.teamA} vs {match.teamB}</h3>
+      {matchDetails && (
+        <div className="mt-2 text-sm">
+          <p>Status: {matchDetails.status}</p>
+          <p>Date: {new Date(matchDetails.matchDate).toLocaleDateString()}</p>
+        </div>
+      )}
     </div>
   );
 }

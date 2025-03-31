@@ -1,49 +1,74 @@
 "use client";
-
-import { useState, useEffect } from "react";
-import { firestoreDB } from "@/lib/firebase";
-import { collection, query, onSnapshot } from "firebase/firestore";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import MatchCard from "./MatchCard"; // Importing MatchCard
+import { firestoreDB } from "@/lib/firebase";
+import { collection, getDocs } from "firebase/firestoreDB";
+import MatchCard from "@/components/MatchCard";
 
 export default function MatchList() {
+  const router = useRouter();
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
-  const router = useRouter();
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    const matchQuery = query(collection(firestoreDB, "matches"));
-    const unsubscribe = onSnapshot(matchQuery, (snapshot) => {
-      const matchData = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      }));
-      setMatches(matchData);
-      setLoading(false);
-    });
+    const fetchMatches = async () => {
+      try {
+        // Proper collection reference
+        const matchesCollection = collection(firestoreDB, "matches");
+        const querySnapshot = await getDocs(matchesCollection);
+        
+        const matchesData = querySnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        
+        setMatches(matchesData);
+        setError(null);
+      } catch (err) {
+        console.error("Error fetching matches:", err);
+        setError("Failed to load matches. Please try again.");
+      } finally {
+        setLoading(false);
+      }
+    };
 
-    return () => unsubscribe();
+    fetchMatches();
   }, []);
 
-  return (
-    <div className="max-w-7xl mx-auto p-6">
-      <h2 className="text-3xl font-bold text-center mb-6">🏏 Live Matches</h2>
+  if (loading) {
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {[...Array(6)].map((_, i) => (
+          <div key={i} className="h-40 bg-gray-100 rounded-lg animate-pulse"></div>
+        ))}
+      </div>
+    );
+  }
 
-      {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-          {[...Array(6)].map((_, i) => (
-            <div key={i} className="h-32 bg-gray-300 animate-pulse rounded-lg"></div>
-          ))}
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-          {matches.map((match) => (
-            <div key={match.id} onClick={() => router.push(`/match/${match.id}`)}>
-              <MatchCard match={match} />
-            </div>
-          ))}
-        </div>
-      )}
+  if (error) {
+    return (
+      <div className="text-center py-8">
+        <p className="text-red-500 mb-2">{error}</p>
+        <button 
+          onClick={() => window.location.reload()}
+          className="bg-blue-500 text-white px-4 py-2 rounded"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      {matches.map(match => (
+        <MatchCard 
+          key={match.id} 
+          match={match}
+          onClick={() => router.push(`/match/${match.id}`)}
+        />
+      ))}
     </div>
   );
 }
