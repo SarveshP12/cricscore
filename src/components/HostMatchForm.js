@@ -3,8 +3,9 @@
 import { useState } from "react";
 import * as XLSX from "xlsx";
 import { useRouter } from "next/navigation";
-import { firestoreDB } from "@/lib/firebase";
-import { collection, addDoc, serverTimestamp, doc, updateDoc } from "firebase/firestore";
+import { firestoreDB, db } from "@/lib/firebase";
+import { collection, addDoc, serverTimestamp } from "firebase/firestore";
+import { ref, set } from "firebase/database";
 
 export default function HostMatchForm() {
   const router = useRouter();
@@ -24,6 +25,7 @@ export default function HostMatchForm() {
 
   const [error, setError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -76,13 +78,16 @@ export default function HostMatchForm() {
     e.preventDefault();
     setError("");
     setSuccessMessage("");
+    setIsSubmitting(true);
   
     if (!formData.matchName || !formData.teamA || !formData.teamB || !formData.matchDate || !formData.matchTime) {
       setError("Match name, date, time, and both teams are required!");
+      setIsSubmitting(false);
       return;
     }
   
     try {
+      // Prepare match data for Firestore
       const matchData = {
         matchName: formData.matchName,
         matchType: formData.matchType,
@@ -94,22 +99,39 @@ export default function HostMatchForm() {
         totalOvers: formData.casualOvers,
         playerListA: formData.playerListA,
         playerListB: formData.playerListB,
-        currentOver: 0,
-        currentBall: 0,
+        status: "upcoming",
+        createdAt: serverTimestamp(),
+      };
+
+      // 1. Add to Firestore (for structured data and querying)
+      const matchRef = await addDoc(collection(firestoreDB, "matches"), matchData);
+      const matchId = matchRef.id;
+
+      // 2. Add to Realtime Database (for live score updates)
+      const realtimeMatchData = {
+        matchDetails: matchData,
+        playerStats: {
+          teamA: {},
+          teamB: {}
+        },
         score: {
           teamA: { runs: 0, wickets: 0, balls: 0 },
           teamB: { runs: 0, wickets: 0, balls: 0 },
         },
-        status: "upcoming",  // ✅ Set to "upcoming"
-        createdAt: serverTimestamp(),
+        currentInnings: 1,
+        currentOver: 0,
+        currentBall: 0,
+        status: "upcoming",
       };
-  
-      const matchRef = await addDoc(collection(firestoreDB, "matches"), matchData);
-      setSuccessMessage("Match successfully created!");
 
-      setTimeout(() => router.push("/scorer-dashboard"), 2000);
+      await set(ref(db, `matches/${matchId}`), realtimeMatchData);
+
+      setSuccessMessage("Match successfully created in both databases!");
+      setTimeout(() => router.push(`/score-match/${matchId}`), 2000);
     } catch (err) {
-      setError("Error storing data. Try again.");
+      console.error("Error storing data:", err);
+      setError("Error storing data. Please try again.");
+      setIsSubmitting(false);
     }
   };
 
@@ -136,7 +158,13 @@ export default function HostMatchForm() {
         <input type="time" name="matchTime" value={formData.matchTime} onChange={handleChange} className="p-2 border rounded" required />
         <input type="file" accept=".xlsx, .xls" onChange={handleFileUpload} className="col-span-2 p-2 border rounded" />
         {formData.uploadedFileName && <p className="col-span-2 text-center">{formData.uploadedFileName} <button type="button" onClick={removeFile} className="text-red-500 ml-2">✖</button></p>}
-        <button type="submit" className="col-span-2 bg-blue-500 text-white p-2 rounded">Host Match</button>
+        <button 
+          type="submit" 
+          className="col-span-2 bg-blue-500 text-white p-2 rounded hover:bg-blue-600 transition-colors"
+          disabled={isSubmitting}
+        >
+          {isSubmitting ? "Creating Match..." : "Host Match"}
+        </button>
       </form>
     </div>
   );

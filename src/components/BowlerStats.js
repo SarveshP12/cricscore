@@ -1,33 +1,58 @@
 "use client";
-import { useState, useEffect } from "react";
-import { db } from "@/lib/firebase";
-import { ref, update, onValue } from "firebase/database";
+import { useEffect, useState } from 'react';
+import { ref, onValue } from 'firebase/database';
+import { db } from '@/lib/firebase';
 
 export default function BowlerStats({ matchId, bowlerId }) {
-  const [bowler, setBowler] = useState(null);
+  const [stats, setStats] = useState({
+    overs: 0,
+    maidens: 0,
+    runs: 0,
+    wickets: 0,
+    economy: 0
+  });
 
   useEffect(() => {
     if (!matchId || !bowlerId) return;
-
-    const bowlerRef = ref(db, `matches/${matchId}/bowlerStats/${bowlerId}`);
     
-    // Fetch bowler stats in real-time
-    const unsubscribe = onValue(bowlerRef, (snapshot) => {
-      setBowler(snapshot.val());
+    const statsRef = ref(db, `matches/${matchId}/playerStats/${bowlerId}`);
+    onValue(statsRef, (snapshot) => {
+      const data = snapshot.val() || {};
+      setStats({
+        overs: data.overs || 0,
+        maidens: data.maidens || 0,
+        runs: data.runs || 0,
+        wickets: data.wickets || 0,
+        economy: data.economy || 0
+      });
     });
-
-    return () => unsubscribe();
   }, [matchId, bowlerId]);
 
-  if (!bowler) return <p>Loading bowler stats...</p>;
-
   return (
-    <div className="p-4 bg-gray-200 rounded-lg shadow">
-      <h2 className="text-xl font-bold">{bowler.name} 🎯</h2>
-      <p>Overs: {bowler.overs.toFixed(1)}</p>
-      <p>Runs Conceded: {bowler.runsConceded}</p>
-      <p>Wickets: {bowler.wickets}</p>
-      <p>Economy: {(bowler.runsConceded / (bowler.overs || 1)).toFixed(2)}</p>
+    <div className="bg-white p-4 rounded-lg shadow-md mb-4">
+      <h2 className="text-xl font-bold mb-4">Bowler Stats</h2>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <p className="text-sm text-gray-500">Overs</p>
+          <p className="text-2xl font-bold">{stats.overs.toFixed(1)}</p>
+        </div>
+        <div>
+          <p className="text-sm text-gray-500">Maidens</p>
+          <p className="text-2xl font-bold">{stats.maidens}</p>
+        </div>
+        <div>
+          <p className="text-sm text-gray-500">Runs</p>
+          <p className="text-2xl font-bold">{stats.runs}</p>
+        </div>
+        <div>
+          <p className="text-sm text-gray-500">Wickets</p>
+          <p className="text-2xl font-bold">{stats.wickets}</p>
+        </div>
+        <div className="col-span-2">
+          <p className="text-sm text-gray-500">Economy</p>
+          <p className="text-2xl font-bold">{stats.economy.toFixed(2)}</p>
+        </div>
+      </div>
     </div>
   );
 }
