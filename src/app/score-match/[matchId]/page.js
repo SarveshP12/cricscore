@@ -4,8 +4,15 @@ import { useParams, useRouter } from "next/navigation";
 import { firestoreDB, db } from "@/lib/firebase";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { ref, onValue, push, set, get, update } from "firebase/database";
+import ScoreDisplay from "@/components/ScoreDisplay";
+import BallHistory from "@/components/BallHistory";
+import PlayerSelector from "@/components/PlayerSelector";
+import ScoreControls from "@/components/ScoreControls";
+import WicketSelector from "@/components/WicketSelector";
+import InningsControls from "@/components/InningsControls";
+import BatsmanStats from "@/components/BatsmanStats";
+import BowlerStats from "@/components/BowlerStats";
 
-// Enhanced safeNumber function with strict validation
 const safeNumber = (value, fallback = 0) => {
   if (value === null || value === undefined || value === '') return fallback;
   const num = Number(value);
@@ -512,509 +519,6 @@ export default function ScorerDashboard() {
     }
   };
 
-  const ScoreDisplay = () => (
-    <div className="bg-white p-4 rounded shadow">
-      <h3 className="font-bold text-lg mb-2">Current Score</h3>
-      {(!batsmen.striker || !batsmen.nonStriker) && (
-        <p className="text-red-500 text-sm mb-2">⚠️ Please select both batsmen</p>
-      )}
-      {!bowler && (
-        <p className="text-red-500 text-sm mb-2">⚠️ Please select a bowler</p>
-      )}
-      <div className="flex justify-between items-center mb-4">
-        <div className="text-3xl font-bold">
-          {score.runs}/{score.wickets}
-        </div>
-        <div className="text-xl">
-          Overs: {overProgress}
-        </div>
-      </div>
-      <div className="mb-4">
-        <div className="grid grid-cols-2 gap-2 mb-2">
-          <div>
-            <p className="text-sm font-medium">Striker:</p>
-            <p className="font-bold">{batsmen.striker?.name || "Not set"}</p>
-          </div>
-          <div>
-            <p className="text-sm font-medium">Non-Striker:</p>
-            <p className="font-bold">{batsmen.nonStriker?.name || "Not set"}</p>
-          </div>
-        </div>
-        <div className="mb-2">
-          <p className="text-sm font-medium">Bowler:</p>
-          <p className="font-bold">{bowler?.name || "Not set"}</p>
-        </div>
-        <p className="text-sm text-gray-600">
-          Extras: {Object.entries(score.extras)
-            .filter(([_, value]) => value > 0)
-            .map(([type, value]) => `${type}: ${value}`)
-            .join(', ')}
-        </p>
-        {freeHit && (
-          <p className="text-sm text-red-500 font-bold">FREE HIT</p>
-        )}
-      </div>
-    </div>
-  );
-
-  const BallHistory = () => (
-    <div className="bg-white p-4 rounded shadow">
-      <h3 className="font-bold mb-2">Ball History</h3>
-      <div className="space-y-2 max-h-64 overflow-y-auto">
-        {balls.length === 0 ? (
-          <p>No balls recorded yet</p>
-        ) : (
-          balls.map((ball) => (
-            <div 
-              key={ball.id} 
-              className={`border-b pb-2 ${ball.wicket ? 'text-red-500' : ''} ${ball.isFreeHit ? 'bg-yellow-50' : ''}`}
-            >
-              <p>{`${ball.over}.${ball.ball}: ${ball.bowler?.name || 'Bowler'} to ${ball.batsman?.name || 'Batsman'}`}</p>
-              <p className="text-sm">
-                {ball.wicket ? `Wicket (${ball.wicket.type})` :
-                ball.runs > 0 ? `${ball.runs} run${ball.runs > 1 ? 's' : ''}` : "Dot ball"}
-                {ball.extras ? ` + ${Object.entries(ball.extras)
-                  .filter(([_, value]) => value > 0)
-                  .map(([type, value]) => `${type} (${value})`)
-                  .join(', ')}` : ''}
-                {ball.isFreeHit ? ' [FREE HIT]' : ''}
-              </p>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
-
-  const PlayerSelector = ({ team, role, onSelect }) => {
-    const [players, setPlayers] = useState([]);
-    const [selectedPlayer, setSelectedPlayer] = useState("");
-
-    useEffect(() => {
-      if (!matchId || !team) return;
-
-      const teamRef = ref(db, `matches/${matchId}/teams/team${team}/players`);
-      const unsubscribe = onValue(teamRef, (snapshot) => {
-        if (snapshot.exists()) {
-          let playersData = snapshot.val();
-          let playersArray = playersData ? Object.values(playersData) : [];
-          
-          if (role === "Bowler" && lastBowler) {
-            playersArray = playersArray.filter(player => player.id !== lastBowler.id);
-          }
-          
-          setPlayers(playersArray);
-        } else {
-          setPlayers([]);
-        }
-      });
-
-      return () => unsubscribe();
-    }, [matchId, team, lastBowler, role]);
-
-    const handleSelect = (e) => {
-      const playerId = e.target.value;
-      const player = players.find(p => p.id === playerId);
-      setSelectedPlayer(playerId);
-      onSelect(player);
-    };
-
-    return (
-      <div className="bg-white p-4 rounded shadow">
-        <label className="block mb-1 font-medium">{role}</label>
-        <select
-          value={selectedPlayer}
-          onChange={handleSelect}
-          className="w-full p-2 border rounded"
-          disabled={players.length === 0}
-        >
-          <option value="">Select {role}</option>
-          {players.map((player) => (
-            <option key={player.id} value={player.id}>
-              {player.name} ({player.role || 'Player'})
-            </option>
-          ))}
-        </select>
-        {role === "Bowler" && lastBowler && players.length === 0 && (
-          <p className="text-sm text-red-500 mt-1">
-            {lastBowler.name} cannot bowl consecutive overs. Please wait until next over.
-          </p>
-        )}
-      </div>
-    );
-  };
-
-  const ScoreControls = ({ onScoreUpdate }) => {
-    const isDisabled = !batsmen.striker || !batsmen.nonStriker || !bowler;
-
-    const handleRunClick = (runs) => {
-      if (isDisabled) {
-        alert("Please select both batsmen and bowler before scoring");
-        return;
-      }
-      onScoreUpdate(runs);
-    };
-
-    const handleExtra = (extraType) => {
-      if (isDisabled) {
-        alert("Please select both batsmen and bowler before scoring");
-        return;
-      }
-      if (extraType === "wide" || extraType === "noball") {
-        onScoreUpdate(0, { [extraType]: 1 });
-      } else {
-        onScoreUpdate(0, { [extraType]: 1 });
-      }
-    };
-
-    const handlePenalty = () => {
-      if (isDisabled) {
-        alert("Please select both batsmen and bowler before scoring");
-        return;
-      }
-      const runs = parseInt(prompt("Enter penalty runs (usually 5):", "5"));
-      if (!isNaN(runs)) {
-        onScoreUpdate(0, { penalty: runs });
-      }
-    };
-
-    return (
-      <div className="bg-white p-4 rounded shadow">
-        <h3 className="font-bold mb-2">Score Controls</h3>
-        {isDisabled && (
-          <p className="text-red-500 mb-2">Please select batsmen and bowler first</p>
-        )}
-        <div className="grid grid-cols-3 gap-2 mb-4">
-          {[0, 1, 2, 3, 4, 6].map((run) => (
-            <button
-              key={run}
-              onClick={() => handleRunClick(run)}
-              className={`py-2 px-4 rounded ${
-                isDisabled 
-                  ? 'bg-gray-300 cursor-not-allowed' 
-                  : 'bg-blue-500 text-white hover:bg-blue-600'
-              }`}
-              disabled={isDisabled}
-            >
-              {run}
-            </button>
-          ))}
-        </div>
-        <div className="grid grid-cols-2 gap-2 mb-4">
-          <button
-            onClick={() => handleExtra("wide")}
-            className={`py-2 px-4 rounded ${
-              isDisabled 
-                ? 'bg-gray-300 cursor-not-allowed' 
-                : 'bg-yellow-500 text-white hover:bg-yellow-600'
-            }`}
-            disabled={isDisabled}
-          >
-            Wide (+1 run)
-          </button>
-          <button
-            onClick={() => handleExtra("noball")}
-            className={`py-2 px-4 rounded ${
-              isDisabled 
-                ? 'bg-gray-300 cursor-not-allowed' 
-                : 'bg-red-500 text-white hover:bg-red-600'
-            }`}
-            disabled={isDisabled}
-          >
-            No Ball (+1 run)
-          </button>
-          <button
-            onClick={() => handleExtra("byes")}
-            className={`py-2 px-4 rounded ${
-              isDisabled 
-                ? 'bg-gray-300 cursor-not-allowed' 
-                : 'bg-green-500 text-white hover:bg-green-600'
-            }`}
-            disabled={isDisabled}
-          >
-            Byes
-          </button>
-          <button
-            onClick={() => handleExtra("legbyes")}
-            className={`py-2 px-4 rounded ${
-              isDisabled 
-                ? 'bg-gray-300 cursor-not-allowed' 
-                : 'bg-purple-500 text-white hover:bg-purple-600'
-            }`}
-            disabled={isDisabled}
-          >
-            Leg Byes
-          </button>
-        </div>
-        <button
-          onClick={handlePenalty}
-          className={`py-2 px-4 rounded w-full ${
-            isDisabled 
-              ? 'bg-gray-300 cursor-not-allowed' 
-              : 'bg-gray-500 text-white hover:bg-gray-600'
-          }`}
-          disabled={isDisabled}
-        >
-          Add Penalty Runs
-        </button>
-      </div>
-    );
-  };
-
-  const WicketSelector = ({ onWicket }) => {
-    const [wicketType, setWicketType] = useState("bowled");
-    const [runs, setRuns] = useState(0);
-    const [extras, setExtras] = useState({});
-    const [fielder, setFielder] = useState(null);
-    const isDisabled = !batsmen.striker || !batsmen.nonStriker || !bowler;
-
-    const handleSubmit = () => {
-      if (isDisabled) {
-        alert("Please select both batsmen and bowler before recording a wicket");
-        return;
-      }
-      
-      onWicket({
-        type: wicketType,
-        runs: safeNumber(runs, 0),
-        extras: Object.keys(extras).length > 0 ? {
-          wide: safeNumber(extras.wide, 0),
-          noball: safeNumber(extras.noball, 0),
-          byes: safeNumber(extras.byes, 0),
-          legbyes: safeNumber(extras.legbyes, 0),
-          penalty: safeNumber(extras.penalty, 0)
-        } : undefined,
-        fielder: wicketType === 'caught' || wicketType === 'runout' || wicketType === 'stumped' ? 
-          { name: fielder || 'Unknown' } : undefined
-      });
-      setWicketType("bowled");
-      setRuns(0);
-      setExtras({});
-      setFielder(null);
-    };
-
-    const handleExtraChange = (extraType, value) => {
-      setExtras(prev => ({
-        ...prev,
-        [extraType]: safeNumber(value, 0)
-      }));
-    };
-
-    return (
-      <div className="bg-white p-4 rounded shadow">
-        <h3 className="font-bold mb-2">Wicket Selector</h3>
-        {isDisabled && (
-          <p className="text-red-500 mb-2">Please select batsmen and bowler first</p>
-        )}
-        <div className="space-y-4">
-          <div>
-            <label className="block mb-1">Wicket Type</label>
-            <select
-              value={wicketType}
-              onChange={(e) => setWicketType(e.target.value)}
-              className="w-full p-2 border rounded"
-              disabled={isDisabled}
-            >
-              <option value="bowled">Bowled</option>
-              <option value="caught">Caught</option>
-              <option value="lbw">LBW</option>
-              <option value="runout">Run Out</option>
-              <option value="stumped">Stumped</option>
-              <option value="hitwicket">Hit Wicket</option>
-              <option value="obstructing">Obstructing the Field</option>
-            </select>
-          </div>
-
-          {(wicketType === 'caught' || wicketType === 'runout' || wicketType === 'stumped') && (
-            <div>
-              <label className="block mb-1">Fielder</label>
-              <input
-                type="text"
-                value={fielder || ""}
-                onChange={(e) => setFielder(e.target.value)}
-                className="w-full p-2 border rounded"
-                placeholder="Enter fielder name"
-                disabled={isDisabled}
-              />
-            </div>
-          )}
-
-          <div>
-            <label className="block mb-1">Runs before wicket</label>
-            <input
-              type="number"
-              value={runs}
-              onChange={(e) => setRuns(safeNumber(e.target.value, 0))}
-              className="w-full p-2 border rounded"
-              min="0"
-              disabled={isDisabled}
-            />
-          </div>
-
-          <div>
-            <label className="block mb-1">Extras (if any)</label>
-            <div className="grid grid-cols-2 gap-2">
-              <input
-                type="number"
-                placeholder="Wides"
-                value={extras.wide || ""}
-                onChange={(e) => handleExtraChange("wide", e.target.value)}
-                className="p-2 border rounded"
-                min="0"
-                disabled={isDisabled}
-              />
-              <input
-                type="number"
-                placeholder="No Balls"
-                value={extras.noball || ""}
-                onChange={(e) => handleExtraChange("noball", e.target.value)}
-                className="p-2 border rounded"
-                min="0"
-                disabled={isDisabled}
-              />
-              <input
-                type="number"
-                placeholder="Byes"
-                value={extras.byes || ""}
-                onChange={(e) => handleExtraChange("byes", e.target.value)}
-                className="p-2 border rounded"
-                min="0"
-                disabled={isDisabled}
-              />
-              <input
-                type="number"
-                placeholder="Leg Byes"
-                value={extras.legbyes || ""}
-                onChange={(e) => handleExtraChange("legbyes", e.target.value)}
-                className="p-2 border rounded"
-                min="0"
-                disabled={isDisabled}
-              />
-            </div>
-          </div>
-
-          <button
-            onClick={handleSubmit}
-            className={`py-2 px-4 rounded w-full ${
-              isDisabled 
-                ? 'bg-gray-300 cursor-not-allowed' 
-                : 'bg-red-500 text-white hover:bg-red-600'
-            }`}
-            disabled={isDisabled}
-          >
-            Record Wicket
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  const InningsControls = () => {
-    return (
-      <div className="bg-white p-4 rounded shadow space-y-4">
-        <h3 className="font-bold">Innings Controls</h3>
-        
-        {matchStatus === "in_progress" && (
-          <button
-            onClick={handleOverComplete}
-            className={`bg-blue-500 text-white py-2 px-4 rounded w-full hover:bg-blue-600 ${
-              score.balls !== 5 ? 'opacity-50 cursor-not-allowed' : ''
-            }`}
-            disabled={score.balls !== 5}
-          >
-            Complete Over
-          </button>
-        )}
-
-        {matchStatus === "in_progress" && (
-          <button
-            onClick={endInnings}
-            className="bg-green-500 text-white py-2 px-4 rounded w-full hover:bg-green-600"
-          >
-            {currentInnings === 1 ? "End 1st Innings" : "End Match"}
-          </button>
-        )}
-      </div>
-    );
-  };
-
-  const BatsmanStats = ({ batsman }) => {
-    const [stats, setStats] = useState(null);
-
-    useEffect(() => {
-      if (!matchId || !batsman || !currentInnings) return;
-
-      const statsRef = ref(db, `matches/${matchId}/innings/${currentInnings}/playerStats/${batsman.id}`);
-      const unsubscribe = onValue(statsRef, (snapshot) => {
-        if (snapshot.exists()) {
-          setStats(snapshot.val());
-        } else {
-          setStats(null);
-        }
-      });
-
-      return () => unsubscribe();
-    }, [matchId, batsman, currentInnings]);
-
-    if (!batsman) return <div className="bg-white p-4 rounded shadow">No batsman selected</div>;
-    if (!stats) return <div className="bg-white p-4 rounded shadow">Loading batsman stats...</div>;
-
-    return (
-      <div className="bg-white p-4 rounded shadow">
-        <h3 className="font-bold mb-2">{batsman.name} - Batting</h3>
-        <div className="grid grid-cols-2 gap-2">
-          <p>Runs: <span className="font-bold">{safeNumber(stats.runs)}</span></p>
-          <p>Balls: <span className="font-bold">{safeNumber(stats.balls)}</span></p>
-          <p>4s: <span className="font-bold">{safeNumber(stats.fours)}</span></p>
-          <p>6s: <span className="font-bold">{safeNumber(stats.sixes)}</span></p>
-          <p>SR: <span className="font-bold">
-            {stats.balls ? ((safeNumber(stats.runs) / safeNumber(stats.balls)) * 100).toFixed(2) : 0}
-          </span></p>
-          <p>Status: <span className="font-bold">{stats.status || "batting"}</span></p>
-        </div>
-      </div>
-    );
-  };
-
-  const BowlerStats = ({ bowler }) => {
-    const [stats, setStats] = useState(null);
-
-    useEffect(() => {
-      if (!matchId || !bowler || !currentInnings) return;
-
-      const statsRef = ref(db, `matches/${matchId}/innings/${currentInnings}/playerStats/${bowler.id}`);
-      const unsubscribe = onValue(statsRef, (snapshot) => {
-        if (snapshot.exists()) {
-          setStats(snapshot.val());
-        } else {
-          setStats(null);
-        }
-      });
-
-      return () => unsubscribe();
-    }, [matchId, bowler, currentInnings]);
-
-    if (!bowler) return <div className="bg-white p-4 rounded shadow">No bowler selected</div>;
-    if (!stats) return <div className="bg-white p-4 rounded shadow">Loading bowler stats...</div>;
-
-    return (
-      <div className="bg-white p-4 rounded shadow">
-        <h3 className="font-bold mb-2">{bowler.name} - Bowling</h3>
-        <div className="grid grid-cols-2 gap-2">
-          <p>Overs: <span className="font-bold">{(safeNumber(stats.balls) / 6).toFixed(1)}</span></p>
-          <p>Maidens: <span className="font-bold">{safeNumber(stats.maidens)}</span></p>
-          <p>Runs: <span className="font-bold">{safeNumber(stats.runs)}</span></p>
-          <p>Wickets: <span className="font-bold">{safeNumber(stats.wickets)}</span></p>
-          <p>Wides: <span className="font-bold">{safeNumber(stats.wides)}</span></p>
-          <p>No Balls: <span className="font-bold">{safeNumber(stats.noballs)}</span></p>
-          <p>Economy: <span className="font-bold">
-            {stats.balls ? ((safeNumber(stats.runs) / safeNumber(stats.balls)) * 6).toFixed(2) : 0}
-          </span></p>
-        </div>
-      </div>
-    );
-  };
-
   return (
     <div className="max-w-6xl mx-auto p-4">
       <button
@@ -1062,7 +566,13 @@ export default function ScorerDashboard() {
       {matchStatus === "in_progress" && (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           <div className="lg:col-span-3 space-y-6">
-            <ScoreDisplay />
+            <ScoreDisplay 
+              score={score} 
+              overProgress={overProgress} 
+              batsmen={batsmen} 
+              bowler={bowler} 
+              freeHit={freeHit}
+            />
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <PlayerSelector
@@ -1071,6 +581,8 @@ export default function ScorerDashboard() {
                 onSelect={(player) =>
                   setBatsmen((prev) => ({ ...prev, striker: player }))
                 }
+                lastBowler={null}
+                matchId={matchId}
               />
               <PlayerSelector
                 team={currentInnings === 1 ? "A" : "B"}
@@ -1078,6 +590,8 @@ export default function ScorerDashboard() {
                 onSelect={(player) =>
                   setBatsmen((prev) => ({ ...prev, nonStriker: player }))
                 }
+                lastBowler={null}
+                matchId={matchId}
               />
             </div>
 
@@ -1085,24 +599,49 @@ export default function ScorerDashboard() {
               team={currentInnings === 1 ? "B" : "A"}
               role="Bowler"
               onSelect={setBowler}
+              lastBowler={lastBowler}
+              matchId={matchId}
             />
 
-            <ScoreControls onScoreUpdate={handleScoreUpdate} />
-            <WicketSelector onWicket={handleWicket} />
+            <ScoreControls 
+              onScoreUpdate={handleScoreUpdate} 
+              batsmen={batsmen} 
+              bowler={bowler}
+            />
+            <WicketSelector 
+              onWicket={handleWicket} 
+              batsmen={batsmen} 
+              bowler={bowler}
+              freeHit={freeHit}
+            />
           </div>
 
           <div className="space-y-6">
-            <InningsControls />
+            <InningsControls 
+              matchStatus={matchStatus}
+              score={score}
+              currentInnings={currentInnings}
+              onOverComplete={handleOverComplete}
+              onEndInnings={endInnings}
+            />
 
             {batsmen.striker && (
-              <BatsmanStats batsman={batsmen.striker} />
+              <BatsmanStats 
+                batsman={batsmen.striker} 
+                matchId={matchId} 
+                currentInnings={currentInnings}
+              />
             )}
 
             {bowler && (
-              <BowlerStats bowler={bowler} />
+              <BowlerStats 
+                bowler={bowler} 
+                matchId={matchId} 
+                currentInnings={currentInnings}
+              />
             )}
 
-            <BallHistory />
+            <BallHistory balls={balls} />
           </div>
         </div>
       )}

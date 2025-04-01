@@ -1,94 +1,45 @@
-"use client";
-import { useEffect, useState } from "react";
-import { ref, onValue } from "firebase/database";
-import { db } from "@/lib/firebase";
-
-export default function ScoreDisplay({ matchId, currentInnings }) {
-  const [score, setScore] = useState({
-    runs: 0,
-    wickets: 0,
-    balls: 0,
-    extras: { wides: 0, noballs: 0, byes: 0, legbyes: 0 }
-  });
-  const [totalRuns, setTotalRuns] = useState(0);
-  const [matchStatus, setMatchStatus] = useState("");
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    if (!matchId || !currentInnings) return;
-
-    setIsLoading(true);
-    
-    const scoreRef = ref(db, `matches/${matchId}/innings/${currentInnings}/score`);
-    const ballsRef = ref(db, `matches/${matchId}/innings/${currentInnings}/balls`);
-    const statusRef = ref(db, `matches/${matchId}/status`);
-    
-    const unsubscribeScore = onValue(scoreRef, (snapshot) => {
-      try {
-        if (snapshot.exists()) {
-          const data = snapshot.val();
-          setScore(prev => ({
-            ...prev,
-            runs: data.runs ?? 0,
-            wickets: data.wickets ?? 0,
-            balls: data.balls ?? 0,
-            extras: data.extras || { wides: 0, noballs: 0, byes: 0, legbyes: 0 }
-          }));
-        }
-        setError(null);
-      } catch (err) {
-        setError("Error loading score data");
-        console.error(err);
-      } finally {
-        setIsLoading(false);
-      }
-    });
-
-    const unsubscribeBalls = onValue(ballsRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const ballsData = snapshot.val();
-        const runsTotal = Object.values(ballsData).reduce((sum, ball) => {
-          return sum + (ball.runs || 0);
-        }, 0);
-        setTotalRuns(runsTotal);
-      }
-    });
-
-    const unsubscribeStatus = onValue(statusRef, (snapshot) => {
-      setMatchStatus(snapshot.val() || "");
-    });
-
-    return () => {
-      unsubscribeScore();
-      unsubscribeBalls();
-      unsubscribeStatus();
-    };
-  }, [matchId, currentInnings]);
-
-  // Calculate over progress by dividing balls by 6
-  const overProgress = (score.balls / 6).toFixed(1);
-
-  if (isLoading) return <div className="text-center py-4">Loading score...</div>;
-  if (error) return <div className="text-red-500 text-center py-4">{error}</div>;
-
+export default function ScoreDisplay({ score, overProgress, batsmen, bowler, freeHit }) {
   return (
     <div className="bg-white p-4 rounded shadow">
       <h3 className="font-bold text-lg mb-2">Current Score</h3>
-      <div className="mb-4">
-        <p>Current Over: {overProgress}</p>
-        <p>Match Status: {matchStatus}</p>
-      </div>
-      <div className="flex justify-between items-center">
+      {(!batsmen.striker || !batsmen.nonStriker) && (
+        <p className="text-red-500 text-sm mb-2">⚠️ Please select both batsmen</p>
+      )}
+      {!bowler && (
+        <p className="text-red-500 text-sm mb-2">⚠️ Please select a bowler</p>
+      )}
+      <div className="flex justify-between items-center mb-4">
         <div className="text-3xl font-bold">
-          {totalRuns}/{score.wickets}
+          {score.runs}/{score.wickets}
+        </div>
+        <div className="text-xl">
+          Overs: {overProgress}
         </div>
       </div>
-      <div className="mt-2 text-sm text-gray-600">
-        <p>Extras: {Object.entries(score.extras)
-          .filter(([_, value]) => value > 0)
-          .map(([type, value]) => `${type}: ${value}`)
-          .join(', ')}</p>
+      <div className="mb-4">
+        <div className="grid grid-cols-2 gap-2 mb-2">
+          <div>
+            <p className="text-sm font-medium">Striker:</p>
+            <p className="font-bold">{batsmen.striker?.name || "Not set"}</p>
+          </div>
+          <div>
+            <p className="text-sm font-medium">Non-Striker:</p>
+            <p className="font-bold">{batsmen.nonStriker?.name || "Not set"}</p>
+          </div>
+        </div>
+        <div className="mb-2">
+          <p className="text-sm font-medium">Bowler:</p>
+          <p className="font-bold">{bowler?.name || "Not set"}</p>
+        </div>
+        <p className="text-sm text-gray-600">
+          Extras: {Object.entries(score.extras)
+            .filter(([_, value]) => value > 0)
+            .map(([type, value]) => `${type}: ${value}`)
+            .join(', ')}
+        </p>
+        {freeHit && (
+          <p className="text-sm text-red-500 font-bold">FREE HIT</p>
+        )}
       </div>
     </div>
   );

@@ -59,21 +59,19 @@ export default function HostMatchForm() {
         if (jsonData.length > 1) {
           const teamA = jsonData[0][0] || "Team A";
           const teamB = jsonData[0][1] || "Team B";
-          const playerListA = jsonData.slice(1).map((row) => ({
-            id: `player_${Math.random().toString(36).substr(2, 9)}`,
-            name: row[0] || "",
-            battingStyle: row[2] || "Right-handed",
-            bowlingStyle: row[3] || "Right-arm medium",
-            role: row[4] || "Player"
-          })).filter(player => player.name);
-          const playerListB = jsonData.slice(1).map((row) => ({
-            id: `player_${Math.random().toString(36).substr(2, 9)}`,
-            name: row[1] || "",
-            battingStyle: row[2] || "Right-handed",
-            bowlingStyle: row[3] || "Right-arm medium",
-            role: row[4] || "Player"
-          })).filter(player => player.name);
-          setFormData((prev) => ({ ...prev, teamA, teamB, playerListA, playerListB }));
+          const playerListA = jsonData.slice(1)
+            .map(row => row[0] || "")
+            .filter(name => name);
+          const playerListB = jsonData.slice(1)
+            .map(row => row[1] || "")
+            .filter(name => name);
+          setFormData((prev) => ({ 
+            ...prev, 
+            teamA, 
+            teamB, 
+            playerListA, 
+            playerListB 
+          }));
         }
       } catch (err) {
         setError("Error reading the Excel file. Ensure correct format.");
@@ -83,7 +81,14 @@ export default function HostMatchForm() {
   };
 
   const removeFile = () => {
-    setFormData((prev) => ({ ...prev, uploadedFileName: "", teamA: "", teamB: "", playerListA: [], playerListB: [] }));
+    setFormData((prev) => ({ 
+      ...prev, 
+      uploadedFileName: "", 
+      teamA: "", 
+      teamB: "", 
+      playerListA: [], 
+      playerListB: [] 
+    }));
   };
 
   const handleSubmit = async (e) => {
@@ -119,152 +124,169 @@ export default function HostMatchForm() {
 
       // 2. Create comprehensive match structure in Realtime Database
       const realtimeMatchData = {
-        // Match metadata
         matchDetails: {
-          ...matchData,
-          id: matchId,
           createdAt: Date.now(),
+          id: matchId,
+          location: formData.location,
+          matchDate: formData.matchDate,
+          matchName: formData.matchName,
+          matchTime: formData.matchTime,
+          matchType: formData.matchType,
+          status: "upcoming",
+          teamA: formData.teamA,
+          teamB: formData.teamB,
+          totalOvers: formData.casualOvers,
+          updatedAt: Date.now(),
+          startTime: null,
+          lastEventId: null,
+          lastEventTimestamp: null
         },
-        
-        // Teams and players
         teams: {
           teamA: {
             name: formData.teamA,
-            players: formData.playerListA.reduce((acc, player) => {
-              acc[player.id] = player;
+            players: formData.playerListA.reduce((acc, playerName, index) => {
+              acc[`player_${index}`] = playerName;
               return acc;
             }, {})
           },
           teamB: {
             name: formData.teamB,
-            players: formData.playerListB.reduce((acc, player) => {
-              acc[player.id] = player;
+            players: formData.playerListB.reduce((acc, playerName, index) => {
+              acc[`player_${index}`] = playerName;
               return acc;
             }, {})
           }
         },
-        
-        // Match state
-        currentInnings: 1,
-        currentOver: 0,
-        currentBall: 0,
-        status: "upcoming",
-        
-        // Score tracking
-        score: {
-          teamA: { 
-            runs: 0, 
-            wickets: 0, 
-            overs: 0,
-            balls: 0,
-            extras: { wides: 0, noballs: 0, byes: 0, legbyes: 0 }
-          },
-          teamB: { 
-            runs: 0, 
-            wickets: 0, 
-            overs: 0,
-            balls: 0,
-            extras: { wides: 0, noballs: 0, byes: 0, legbyes: 0 }
-          },
+        currentState: {
+          currentBall: 0,
+          currentInnings: 1,
+          currentOver: 0,
+          strikeBatsmanId: null,
+          nonStrikeBatsmanId: null,
+          currentBowlerId: null,
+          requiredRunRate: 0,
+          lastBallTimestamp: null
         },
-        
-        // Innings data
         innings: {
           1: {
-            battingTeam: "teamA",
-            bowlingTeam: "teamB",
-            startedAt: null,
-            endedAt: null,
-            status: "not_started",
-            score: 0,
-            wickets: 0,
-            overs: 0,
-            balls: [],
-            currentBatsmen: {
-              striker: null,
-              nonStriker: null
+            totalRuns: 0,
+            totalWickets: 0,
+            totalOvers: "0.0",
+            extras: {
+              wides: 0,
+              noBalls: 0,
+              byes: 0,
+              legByes: 0,
+              penalty: 0
             },
-            currentBowler: null
+            ballByBall: {},
+            overs: {}
           },
           2: {
-            battingTeam: "teamB",
-            bowlingTeam: "teamA",
-            startedAt: null,
-            endedAt: null,
-            status: "not_started",
-            score: 0,
-            wickets: 0,
-            overs: 0,
-            balls: [],
-            currentBatsmen: {
-              striker: null,
-              nonStriker: null
+            totalRuns: 0,
+            totalWickets: 0,
+            totalOvers: "0.0",
+            extras: {
+              wides: 0,
+              noBalls: 0,
+              byes: 0,
+              legByes: 0,
+              penalty: 0
             },
-            currentBowler: null
+            ballByBall: {},
+            overs: {}
           }
         },
-        
-        // Player statistics
         playerStats: {
-          teamA: formData.playerListA.reduce((acc, player) => {
-            acc[player.id] = {
+          teamA: formData.playerListA.reduce((acc, playerName, index) => {
+            const playerId = `player_${index}`;
+            acc[playerId] = {
+              name: playerName,
               batting: {
                 runs: 0,
-                balls: 0,
+                ballsFaced: 0,
                 fours: 0,
                 sixes: 0,
                 strikeRate: 0,
-                status: "not_out"
+                dismissalType: null,
+                bowlerDismissalId: null,
+                fielderDismissalId: null
               },
               bowling: {
-                overs: 0,
+                overs: "0.0",
                 maidens: 0,
                 runs: 0,
                 wickets: 0,
-                economy: 0
+                economy: 0,
+                dots: 0,
+                wides: 0,
+                noBalls: 0
               },
               fielding: {
                 catches: 0,
-                runouts: 0,
+                runOuts: 0,
                 stumpings: 0
               }
             };
             return acc;
           }, {}),
-          teamB: formData.playerListB.reduce((acc, player) => {
-            acc[player.id] = {
+          teamB: formData.playerListB.reduce((acc, playerName, index) => {
+            const playerId = `player_${index}`;
+            acc[playerId] = {
+              name: playerName,
               batting: {
                 runs: 0,
-                balls: 0,
+                ballsFaced: 0,
                 fours: 0,
                 sixes: 0,
                 strikeRate: 0,
-                status: "not_out"
+                dismissalType: null,
+                bowlerDismissalId: null,
+                fielderDismissalId: null
               },
               bowling: {
-                overs: 0,
+                overs: "0.0",
                 maidens: 0,
                 runs: 0,
                 wickets: 0,
-                economy: 0
+                economy: 0,
+                dots: 0,
+                wides: 0,
+                noBalls: 0
               },
               fielding: {
                 catches: 0,
-                runouts: 0,
+                runOuts: 0,
                 stumpings: 0
               }
             };
             return acc;
           }, {})
         },
-        
-        // Match events log
-        events: []
+        score: {
+          teamA: {
+            total: 0,
+            wickets: 0,
+            overs: "0.0",
+            runRate: 0,
+            extras: 0
+          },
+          teamB: {
+            total: 0,
+            wickets: 0,
+            overs: "0.0",
+            runRate: 0,
+            extras: 0,
+            target: 0
+          }
+        },
+        partnerships: {},
+        eventLog: {}
       };
 
       await set(ref(db, `matches/${matchId}`), realtimeMatchData);
 
-      setSuccessMessage("Match successfully created with comprehensive structure!");
+      setSuccessMessage("Match successfully created!");
       setTimeout(() => router.push(`/score-match/${matchId}`), 2000);
     } catch (err) {
       console.error("Error creating match:", err);
