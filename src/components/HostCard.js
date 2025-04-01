@@ -4,7 +4,7 @@ import { firestoreDB, db } from "@/lib/firebase";
 import { doc, getDoc } from "firebase/firestore";
 import { ref, update, onValue } from "firebase/database";
 
-export default function MatchCard({ match, onClick }) {
+export default function HostCard({ match, onClick }) {
   const [matchDetails, setMatchDetails] = useState(null);
   const [loading, setLoading] = useState(true);
   const [startingMatch, setStartingMatch] = useState(false);

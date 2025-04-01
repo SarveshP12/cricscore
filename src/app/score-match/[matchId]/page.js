@@ -5,14 +5,13 @@ import { firestoreDB, db } from "@/lib/firebase";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { ref, onValue, push, set, get, update } from "firebase/database";
 
-// Helper function to ensure valid numeric values
+// Enhanced safeNumber function with strict validation
 const safeNumber = (value, fallback = 0) => {
-  if (value === null || value === undefined) return fallback;
+  if (value === null || value === undefined || value === '') return fallback;
   const num = Number(value);
   return isNaN(num) ? fallback : num;
 };
 
-// Default extras object structure
 const defaultExtras = {
   wides: 0,
   noballs: 0,
@@ -58,26 +57,19 @@ export default function ScorerDashboard() {
       }
     };
 
-    const inningsRef = ref(db, `matches/${matchId}/currentInnings`);
-    const statusRef = ref(db, `matches/${matchId}/status`);
-    const ballsRef = ref(db, `matches/${matchId}/currentBall`);
-    const scoreRef = ref(db, `matches/${matchId}/innings/${currentInnings}/score`);
-    const ballsHistoryRef = ref(db, `matches/${matchId}/innings/${currentInnings}/balls`);
-    const lastBallRef = ref(db, `matches/${matchId}/innings/${currentInnings}/lastBall`);
-
-    const unsubscribeInnings = onValue(inningsRef, (snapshot) => {
+    const unsubscribeInnings = onValue(ref(db, `matches/${matchId}/currentInnings`), (snapshot) => {
       setCurrentInnings(safeNumber(snapshot.val(), 1));
     });
 
-    const unsubscribeStatus = onValue(statusRef, (snapshot) => {
+    const unsubscribeStatus = onValue(ref(db, `matches/${matchId}/status`), (snapshot) => {
       setMatchStatus(snapshot.val() || "not_started");
     });
 
-    const unsubscribeBalls = onValue(ballsRef, (snapshot) => {
+    const unsubscribeBalls = onValue(ref(db, `matches/${matchId}/currentBall`), (snapshot) => {
       setTotalBalls(safeNumber(snapshot.val()));
     });
 
-    const unsubscribeScore = onValue(scoreRef, (snapshot) => {
+    const unsubscribeScore = onValue(ref(db, `matches/${matchId}/innings/${currentInnings}/score`), (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.val();
         setScore({
@@ -91,7 +83,7 @@ export default function ScorerDashboard() {
       setIsLoading(false);
     });
 
-    const unsubscribeBallsHistory = onValue(ballsHistoryRef, (snapshot) => {
+    const unsubscribeBallsHistory = onValue(ref(db, `matches/${matchId}/innings/${currentInnings}/balls`), (snapshot) => {
       if (snapshot.exists()) {
         const ballsData = snapshot.val();
         const ballsArray = Object.entries(ballsData)
@@ -103,7 +95,7 @@ export default function ScorerDashboard() {
       }
     });
 
-    const unsubscribeLastBall = onValue(lastBallRef, (snapshot) => {
+    const unsubscribeLastBall = onValue(ref(db, `matches/${matchId}/innings/${currentInnings}/lastBall`), (snapshot) => {
       if (snapshot.exists()) {
         const ball = snapshot.val();
         setLastBall(ball);
@@ -136,8 +128,7 @@ export default function ScorerDashboard() {
 
     try {
       const inningsPath = `matches/${matchId}/innings/${currentInnings}`;
-      const ballsRef = ref(db, `${inningsPath}/balls`);
-      const newBallRef = push(ballsRef);
+      const newBallRef = push(ref(db, `${inningsPath}/balls`));
       
       const completeBallData = {
         ...ballData,
@@ -148,20 +139,19 @@ export default function ScorerDashboard() {
         over: safeNumber(score.overs),
         ball: safeNumber(score.balls) + 1,
         isFreeHit: freeHit,
-        runs: safeNumber(ballData.runs),
+        runs: safeNumber(ballData.runs, 0),
         extras: {
-          wides: safeNumber(ballData.extras?.wide),
-          noballs: safeNumber(ballData.extras?.noball),
-          byes: safeNumber(ballData.extras?.byes),
-          legbyes: safeNumber(ballData.extras?.legbyes),
-          penalty: safeNumber(ballData.extras?.penalty),
+          wides: safeNumber(ballData.extras?.wide, 0),
+          noballs: safeNumber(ballData.extras?.noball, 0),
+          byes: safeNumber(ballData.extras?.byes, 0),
+          legbyes: safeNumber(ballData.extras?.legbyes, 0),
+          penalty: safeNumber(ballData.extras?.penalty, 0),
         },
         wicket: ballData.wicket || null
       };
 
       await set(newBallRef, completeBallData);
       await set(ref(db, `${inningsPath}/lastBall`), completeBallData);
-      
       await updatePlayerStats(completeBallData);
       
       return true;
@@ -189,16 +179,13 @@ export default function ScorerDashboard() {
       let updates = {};
       
       if (!ballData.wicket) {
-        updates.runs = safeNumber(currentStats.runs) + safeNumber(ballData.runs);
-        updates.balls = safeNumber(currentStats.balls) + 1;
+        updates.runs = safeNumber(currentStats.runs, 0) + safeNumber(ballData.runs, 0);
+        updates.balls = safeNumber(currentStats.balls, 0) + 1;
         
-        if (ballData.runs === 4) updates.fours = safeNumber(currentStats.fours) + 1;
-        if (ballData.runs === 6) updates.sixes = safeNumber(currentStats.sixes) + 1;
+        if (ballData.runs === 4) updates.fours = safeNumber(currentStats.fours, 0) + 1;
+        if (ballData.runs === 6) updates.sixes = safeNumber(currentStats.sixes, 0) + 1;
       } else {
         updates.status = `out (${ballData.wicket.type})`;
-        // Keep existing runs and balls count
-        updates.runs = safeNumber(currentStats.runs);
-        updates.balls = safeNumber(currentStats.balls);
       }
 
       await update(batsmanRef, updates);
@@ -218,23 +205,23 @@ export default function ScorerDashboard() {
       };
 
       let updates = {
-        balls: safeNumber(currentStats.balls) + (ballData.extras?.wide || ballData.extras?.noball ? 0 : 1),
-        runs: safeNumber(currentStats.runs) + 
-              safeNumber(ballData.runs) + 
-              safeNumber(ballData.extras?.wide) + 
-              safeNumber(ballData.extras?.noball)
+        balls: safeNumber(currentStats.balls, 0) + (ballData.extras?.wide || ballData.extras?.noball ? 0 : 1),
+        runs: safeNumber(currentStats.runs, 0) + 
+              safeNumber(ballData.runs, 0) + 
+              safeNumber(ballData.extras?.wide, 0) + 
+              safeNumber(ballData.extras?.noball, 0)
       };
 
       if (ballData.wicket && ['bowled', 'caught', 'lbw', 'stumped', 'hitwicket'].includes(ballData.wicket.type)) {
-        updates.wickets = safeNumber(currentStats.wickets) + 1;
+        updates.wickets = safeNumber(currentStats.wickets, 0) + 1;
       }
 
       if (ballData.extras?.wide) {
-        updates.wides = safeNumber(currentStats.wides) + 1;
+        updates.wides = safeNumber(currentStats.wides, 0) + 1;
       }
 
       if (ballData.extras?.noball) {
-        updates.noballs = safeNumber(currentStats.noballs) + 1;
+        updates.noballs = safeNumber(currentStats.noballs, 0) + 1;
       }
 
       await update(bowlerRef, updates);
@@ -247,18 +234,25 @@ export default function ScorerDashboard() {
       return;
     }
 
-    const runsValue = safeNumber(runs);
+    const runsValue = safeNumber(runs, 0);
     const extrasValue = {
-      wide: safeNumber(extras.wide),
-      noball: safeNumber(extras.noball),
-      byes: safeNumber(extras.byes),
-      legbyes: safeNumber(extras.legbyes),
-      penalty: safeNumber(extras.penalty)
+      wide: safeNumber(extras.wide, 0),
+      noball: safeNumber(extras.noball, 0),
+      byes: safeNumber(extras.byes, 0),
+      legbyes: safeNumber(extras.legbyes, 0),
+      penalty: safeNumber(extras.penalty, 0)
     };
 
     const isExtraBall = extrasValue.wide > 0 || extrasValue.noball > 0;
-    const runsToAdd = runsValue + extrasValue.wide + extrasValue.noball + 
-                     extrasValue.byes + extrasValue.legbyes + extrasValue.penalty;
+    const runsToAdd = safeNumber(
+      runsValue + 
+      extrasValue.wide + 
+      extrasValue.noball + 
+      extrasValue.byes + 
+      extrasValue.legbyes + 
+      extrasValue.penalty,
+      0
+    );
     
     await recordBall({
       runs: runsValue,
@@ -272,9 +266,9 @@ export default function ScorerDashboard() {
     const currentScore = snapshot.exists() ? snapshot.val() : { runs: 0, wickets: 0, balls: 0 };
     
     await set(scoreRef, {
-      runs: safeNumber(currentScore.runs) + runsToAdd,
-      wickets: safeNumber(currentScore.wickets),
-      balls: safeNumber(currentScore.balls) + (isExtraBall ? 0 : 1),
+      runs: safeNumber(currentScore.runs, 0) + runsToAdd,
+      wickets: safeNumber(currentScore.wickets, 0),
+      balls: safeNumber(currentScore.balls, 0) + (isExtraBall ? 0 : 1),
     });
 
     const inningsPath = `matches/${matchId}/innings/${currentInnings}/score`;
@@ -287,20 +281,20 @@ export default function ScorerDashboard() {
     };
     
     await set(ref(db, inningsPath), {
-      runs: safeNumber(inningsScore.runs) + runsToAdd,
-      wickets: safeNumber(inningsScore.wickets),
-      balls: safeNumber(inningsScore.balls) + (isExtraBall ? 0 : 1),
+      runs: safeNumber(inningsScore.runs, 0) + runsToAdd,
+      wickets: safeNumber(inningsScore.wickets, 0),
+      balls: safeNumber(inningsScore.balls, 0) + (isExtraBall ? 0 : 1),
       extras: {
-        wides: safeNumber(inningsScore.extras?.wides) + extrasValue.wide,
-        noballs: safeNumber(inningsScore.extras?.noballs) + extrasValue.noball,
-        byes: safeNumber(inningsScore.extras?.byes) + extrasValue.byes,
-        legbyes: safeNumber(inningsScore.extras?.legbyes) + extrasValue.legbyes,
-        penalty: safeNumber(inningsScore.extras?.penalty) + extrasValue.penalty,
+        wides: safeNumber(inningsScore.extras?.wides, 0) + extrasValue.wide,
+        noballs: safeNumber(inningsScore.extras?.noballs, 0) + extrasValue.noball,
+        byes: safeNumber(inningsScore.extras?.byes, 0) + extrasValue.byes,
+        legbyes: safeNumber(inningsScore.extras?.legbyes, 0) + extrasValue.legbyes,
+        penalty: safeNumber(inningsScore.extras?.penalty, 0) + extrasValue.penalty,
       }
     });
 
     if (!isExtraBall) {
-      await set(ref(db, `matches/${matchId}/currentBall`), safeNumber(totalBalls) + 1);
+      await set(ref(db, `matches/${matchId}/currentBall`), safeNumber(totalBalls, 0) + 1);
     }
 
     if (extrasValue.noball > 0) {
@@ -309,7 +303,6 @@ export default function ScorerDashboard() {
       setFreeHit(false);
     }
 
-    // Rotate strike if odd runs (except on last ball of over)
     if (runsValue % 2 !== 0 && (safeNumber(score.balls) + 1) % 6 !== 0) {
       setBatsmen(prev => ({
         striker: prev.nonStriker,
@@ -329,21 +322,27 @@ export default function ScorerDashboard() {
       return;
     }
 
-    const runsValue = safeNumber(wicketData.runs);
+    const runsValue = safeNumber(wicketData.runs, 0);
     const extrasValue = wicketData.extras ? {
-      wide: safeNumber(wicketData.extras.wide),
-      noball: safeNumber(wicketData.extras.noball),
-      byes: safeNumber(wicketData.extras.byes),
-      legbyes: safeNumber(wicketData.extras.legbyes),
-      penalty: safeNumber(wicketData.extras.penalty)
+      wide: safeNumber(wicketData.extras.wide, 0),
+      noball: safeNumber(wicketData.extras.noball, 0),
+      byes: safeNumber(wicketData.extras.byes, 0),
+      legbyes: safeNumber(wicketData.extras.legbyes, 0),
+      penalty: safeNumber(wicketData.extras.penalty, 0)
     } : { ...defaultExtras };
 
     const isExtraBall = extrasValue.wide > 0 || extrasValue.noball > 0;
-    const runsToAdd = runsValue + extrasValue.wide + extrasValue.noball + 
-                     extrasValue.byes + extrasValue.legbyes + extrasValue.penalty;
+    const runsToAdd = safeNumber(
+      runsValue + 
+      extrasValue.wide + 
+      extrasValue.noball + 
+      extrasValue.byes + 
+      extrasValue.legbyes + 
+      extrasValue.penalty,
+      0
+    );
 
     try {
-      // Record the ball first
       const success = await recordBall({
         runs: runsValue,
         extras: extrasValue,
@@ -356,19 +355,17 @@ export default function ScorerDashboard() {
 
       if (!success) return;
 
-      // Update the score
       const teamPath = currentInnings === 1 ? "teamA" : "teamB";
       const scoreRef = ref(db, `matches/${matchId}/score/${teamPath}`);
       const snapshot = await get(scoreRef);
       const currentScore = snapshot.exists() ? snapshot.val() : { runs: 0, wickets: 0, balls: 0 };
       
       await set(scoreRef, {
-        runs: safeNumber(currentScore.runs) + runsToAdd,
-        wickets: safeNumber(currentScore.wickets) + 1,
-        balls: safeNumber(currentScore.balls) + (isExtraBall ? 0 : 1),
+        runs: safeNumber(currentScore.runs, 0) + runsToAdd,
+        wickets: safeNumber(currentScore.wickets, 0) + 1,
+        balls: safeNumber(currentScore.balls, 0) + (isExtraBall ? 0 : 1),
       });
 
-      // Update innings score
       const inningsPath = `matches/${matchId}/innings/${currentInnings}/score`;
       const inningsSnapshot = await get(ref(db, inningsPath));
       const inningsScore = inningsSnapshot.exists() ? inningsSnapshot.val() : { 
@@ -379,23 +376,22 @@ export default function ScorerDashboard() {
       };
       
       await set(ref(db, inningsPath), {
-        runs: safeNumber(inningsScore.runs) + runsToAdd,
-        wickets: safeNumber(inningsScore.wickets) + 1,
-        balls: safeNumber(inningsScore.balls) + (isExtraBall ? 0 : 1),
+        runs: safeNumber(inningsScore.runs, 0) + runsToAdd,
+        wickets: safeNumber(inningsScore.wickets, 0) + 1,
+        balls: safeNumber(inningsScore.balls, 0) + (isExtraBall ? 0 : 1),
         extras: {
-          wides: safeNumber(inningsScore.extras?.wides) + extrasValue.wide,
-          noballs: safeNumber(inningsScore.extras?.noballs) + extrasValue.noball,
-          byes: safeNumber(inningsScore.extras?.byes) + extrasValue.byes,
-          legbyes: safeNumber(inningsScore.extras?.legbyes) + extrasValue.legbyes,
-          penalty: safeNumber(inningsScore.extras?.penalty) + extrasValue.penalty,
+          wides: safeNumber(inningsScore.extras?.wides, 0) + extrasValue.wide,
+          noballs: safeNumber(inningsScore.extras?.noballs, 0) + extrasValue.noball,
+          byes: safeNumber(inningsScore.extras?.byes, 0) + extrasValue.byes,
+          legbyes: safeNumber(inningsScore.extras?.legbyes, 0) + extrasValue.legbyes,
+          penalty: safeNumber(inningsScore.extras?.penalty, 0) + extrasValue.penalty,
         }
       });
 
       if (!isExtraBall) {
-        await set(ref(db, `matches/${matchId}/currentBall`), safeNumber(totalBalls) + 1);
+        await set(ref(db, `matches/${matchId}/currentBall`), safeNumber(totalBalls, 0) + 1);
       }
 
-      // Prompt for new batsman
       const newBatsman = prompt("Enter name of new batsman coming in:");
       if (newBatsman) {
         const newBatsmanData = { id: Date.now().toString(), name: newBatsman };
@@ -404,7 +400,6 @@ export default function ScorerDashboard() {
           striker: newBatsmanData
         }));
         
-        // Add new batsman to player stats
         const newBatsmanRef = ref(db, `matches/${matchId}/innings/${currentInnings}/playerStats/${newBatsmanData.id}`);
         await set(newBatsmanRef, {
           runs: 0,
@@ -432,17 +427,14 @@ export default function ScorerDashboard() {
       return;
     }
 
-    // Rotate strike at end of over
     setBatsmen(prev => ({
       striker: prev.nonStriker,
       nonStriker: prev.striker
     }));
 
-    // Set last bowler and reset current bowler
     setLastBowler(bowler);
     setBowler(null);
 
-    // Prompt for new bowler
     alert("Please select a new bowler for the next over");
   };
 
@@ -784,13 +776,13 @@ export default function ScorerDashboard() {
       
       onWicket({
         type: wicketType,
-        runs: safeNumber(runs),
+        runs: safeNumber(runs, 0),
         extras: Object.keys(extras).length > 0 ? {
-          wide: safeNumber(extras.wide),
-          noball: safeNumber(extras.noball),
-          byes: safeNumber(extras.byes),
-          legbyes: safeNumber(extras.legbyes),
-          penalty: safeNumber(extras.penalty)
+          wide: safeNumber(extras.wide, 0),
+          noball: safeNumber(extras.noball, 0),
+          byes: safeNumber(extras.byes, 0),
+          legbyes: safeNumber(extras.legbyes, 0),
+          penalty: safeNumber(extras.penalty, 0)
         } : undefined,
         fielder: wicketType === 'caught' || wicketType === 'runout' || wicketType === 'stumped' ? 
           { name: fielder || 'Unknown' } : undefined
@@ -804,7 +796,7 @@ export default function ScorerDashboard() {
     const handleExtraChange = (extraType, value) => {
       setExtras(prev => ({
         ...prev,
-        [extraType]: safeNumber(value)
+        [extraType]: safeNumber(value, 0)
       }));
     };
 
@@ -852,7 +844,7 @@ export default function ScorerDashboard() {
             <input
               type="number"
               value={runs}
-              onChange={(e) => setRuns(safeNumber(e.target.value))}
+              onChange={(e) => setRuns(safeNumber(e.target.value, 0))}
               className="w-full p-2 border rounded"
               min="0"
               disabled={isDisabled}
@@ -917,7 +909,7 @@ export default function ScorerDashboard() {
     );
   };
 
-  const InningsControls = ({ matchId, currentInnings, matchStatus }) => {
+  const InningsControls = () => {
     return (
       <div className="bg-white p-4 rounded shadow space-y-4">
         <h3 className="font-bold">Innings Controls</h3>
@@ -946,13 +938,13 @@ export default function ScorerDashboard() {
     );
   };
 
-  const BatsmanStats = ({ matchId, batsman, inningsNumber }) => {
+  const BatsmanStats = ({ batsman }) => {
     const [stats, setStats] = useState(null);
 
     useEffect(() => {
-      if (!matchId || !batsman || !inningsNumber) return;
+      if (!matchId || !batsman || !currentInnings) return;
 
-      const statsRef = ref(db, `matches/${matchId}/innings/${inningsNumber}/playerStats/${batsman.id}`);
+      const statsRef = ref(db, `matches/${matchId}/innings/${currentInnings}/playerStats/${batsman.id}`);
       const unsubscribe = onValue(statsRef, (snapshot) => {
         if (snapshot.exists()) {
           setStats(snapshot.val());
@@ -962,7 +954,7 @@ export default function ScorerDashboard() {
       });
 
       return () => unsubscribe();
-    }, [matchId, batsman, inningsNumber]);
+    }, [matchId, batsman, currentInnings]);
 
     if (!batsman) return <div className="bg-white p-4 rounded shadow">No batsman selected</div>;
     if (!stats) return <div className="bg-white p-4 rounded shadow">Loading batsman stats...</div>;
@@ -984,13 +976,13 @@ export default function ScorerDashboard() {
     );
   };
 
-  const BowlerStats = ({ matchId, bowler, inningsNumber }) => {
+  const BowlerStats = ({ bowler }) => {
     const [stats, setStats] = useState(null);
 
     useEffect(() => {
-      if (!matchId || !bowler || !inningsNumber) return;
+      if (!matchId || !bowler || !currentInnings) return;
 
-      const statsRef = ref(db, `matches/${matchId}/innings/${inningsNumber}/playerStats/${bowler.id}`);
+      const statsRef = ref(db, `matches/${matchId}/innings/${currentInnings}/playerStats/${bowler.id}`);
       const unsubscribe = onValue(statsRef, (snapshot) => {
         if (snapshot.exists()) {
           setStats(snapshot.val());
@@ -1000,7 +992,7 @@ export default function ScorerDashboard() {
       });
 
       return () => unsubscribe();
-    }, [matchId, bowler, inningsNumber]);
+    }, [matchId, bowler, currentInnings]);
 
     if (!bowler) return <div className="bg-white p-4 rounded shadow">No bowler selected</div>;
     if (!stats) return <div className="bg-white p-4 rounded shadow">Loading bowler stats...</div>;
@@ -1100,26 +1092,14 @@ export default function ScorerDashboard() {
           </div>
 
           <div className="space-y-6">
-            <InningsControls 
-              matchId={matchId} 
-              currentInnings={currentInnings} 
-              matchStatus={matchStatus} 
-            />
+            <InningsControls />
 
             {batsmen.striker && (
-              <BatsmanStats 
-                matchId={matchId} 
-                batsman={batsmen.striker} 
-                inningsNumber={currentInnings}
-              />
+              <BatsmanStats batsman={batsmen.striker} />
             )}
 
             {bowler && (
-              <BowlerStats 
-                matchId={matchId} 
-                bowler={bowler} 
-                inningsNumber={currentInnings}
-              />
+              <BowlerStats bowler={bowler} />
             )}
 
             <BallHistory />

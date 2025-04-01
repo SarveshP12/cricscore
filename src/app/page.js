@@ -19,7 +19,7 @@ export default function Home() {
           </Link>
           <Link href="/host-tournament">
             <div className="p-6 bg-white shadow-md rounded-lg hover:bg-blue-500 hover:text-white transition cursor-pointer">
-              <h2 className="text-2xl font-bold">📅 Host a Tournament</h2>
+              <h2 className="text-2xl font-bold">📅 LBW Review System</h2>
               <p>Organize a full-fledged tournament.</p>
             </div>
           </Link>

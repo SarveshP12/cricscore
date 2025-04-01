@@ -1,4 +1,4 @@
-import MatchList from "@/components/MatchList";
+import MatchList from "@/components/ViewList";
 import Navbar from "@/components/Navbar";
 
 export default function MatchesPage() {

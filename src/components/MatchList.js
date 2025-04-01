@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { firestoreDB } from "@/lib/firebase";
-import { collection, getDocs } from "firebase/firestoreDB";
-import MatchCard from "@/components/MatchCard";
+import { db } from "@/lib/firebase";
+import { ref, onValue } from "firebase/database";
+import HostCard from "@/components/HostCard";
 
 export default function MatchList() {
   const router = useRouter();
@@ -12,28 +12,28 @@ export default function MatchList() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    const fetchMatches = async () => {
-      try {
-        // Proper collection reference
-        const matchesCollection = collection(firestoreDB, "matches");
-        const querySnapshot = await getDocs(matchesCollection);
-        
-        const matchesData = querySnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
+    const matchesRef = ref(db, "matches"); // Reference to the "matches" node
+    
+    const unsubscribe = onValue(matchesRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const matchesData = Object.entries(snapshot.val()).map(([id, data]) => ({
+          id,
+          ...data,
         }));
-        
         setMatches(matchesData);
         setError(null);
-      } catch (err) {
-        console.error("Error fetching matches:", err);
-        setError("Failed to load matches. Please try again.");
-      } finally {
-        setLoading(false);
+      } else {
+        setMatches([]);
+        setError("No matches found.");
       }
-    };
-
-    fetchMatches();
+      setLoading(false);
+    }, (error) => {
+      console.error("Error fetching matches:", error);
+      setError("Failed to load matches. Please try again.");
+      setLoading(false);
+    });
+    
+    return () => unsubscribe(); // Cleanup subscription on unmount
   }, []);
 
   if (loading) {
@@ -63,10 +63,10 @@ export default function MatchList() {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       {matches.map(match => (
-        <MatchCard 
+        <HostCard 
           key={match.id} 
           match={match}
-          onClick={() => router.push(`/match/${match.id}`)}
+          onClick={() => router.push(`/view-match/${match.id}`)}
         />
       ))}
     </div>
