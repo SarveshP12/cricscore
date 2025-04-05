@@ -15,7 +15,7 @@ export default function InningsControls({
             className={`bg-blue-500 text-white py-2 px-4 rounded w-full hover:bg-blue-600 ${
               score.balls !== 5 ? 'opacity-50 cursor-not-allowed' : ''
             }`}
-            disabled={score.balls !== 5}
+            disabled={score.balls !== 6}
           >
             Complete Over
           </button>

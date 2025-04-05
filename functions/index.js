@@ -3,23 +3,21 @@ const admin = require("firebase-admin");
 
 admin.initializeApp();
 
-exports.updateMatchStatus = functions.pubsub.schedule("every 1 minutes").onRun(async () => {
-  const now = new Date();
-  const matchesRef = admin.firestore().collection("matches");
+exports.onScoreUpdate = functions.database
+  .ref("/events/{matchId}/score-updates/{ballId}")
+  .onWrite(async (change, context) => {
+    const matchId = context.params.matchId;
+    const ballId = context.params.ballId;
+    const newScore = change.after.val();
 
-  const upcomingMatches = await matchesRef.where("status", "==", "upcoming").get();
+    if (!newScore) return null; // Ignore deletions
 
-  const updatePromises = upcomingMatches.docs.map(async (matchDoc) => {
-    const matchData = matchDoc.data();
-    const matchDateTime = new Date(`${matchData.matchDate}T${matchData.matchTime}:00Z`);
-    
-    if (matchDateTime.getTime() <= now.getTime()) {
-      console.log(`Updating status for match: ${matchData.matchName}`);
-      return matchDoc.ref.update({ status: "ongoing" });
-    }
+    console.log(`New score recorded for match ${matchId}:`, newScore);
+
+    // Update match summary in Firebase
+    return admin.database().ref(`/matches/${matchId}/summary`).update({
+      lastRun: newScore.run,
+      lastBall: ballId,
+      updatedAt: admin.database.ServerValue.TIMESTAMP,
+    });
   });
-
-  await Promise.all(updatePromises);
-  console.log("Match status check completed.");
-  return null;
-});

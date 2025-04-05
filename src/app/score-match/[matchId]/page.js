@@ -1,9 +1,9 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { firestoreDB, db } from "@/lib/firebase";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
-import { ref, onValue, push, set, get, update } from "firebase/database";
+import { ref, onValue, push, update, get } from "firebase/database";
 import ScoreDisplay from "@/components/ScoreDisplay";
 import BallHistory from "@/components/BallHistory";
 import PlayerSelector from "@/components/PlayerSelector";
@@ -30,24 +30,32 @@ const defaultExtras = {
 export default function ScorerDashboard() {
   const { matchId } = useParams();
   const router = useRouter();
-  const [match, setMatch] = useState(null);
-  const [currentInnings, setCurrentInnings] = useState(1);
-  const [batsmen, setBatsmen] = useState({ striker: null, nonStriker: null });
-  const [bowler, setBowler] = useState(null);
-  const [lastBowler, setLastBowler] = useState(null);
-  const [matchStatus, setMatchStatus] = useState("not_started");
-  const [totalBalls, setTotalBalls] = useState(0);
-  const [score, setScore] = useState({
-    runs: 0,
-    wickets: 0,
-    extras: { ...defaultExtras },
-    overs: 0,
-    balls: 0
+  
+  const [gameState, setGameState] = useState({
+    match: null,
+    currentInnings: 1,
+    batsmen: { striker: null, nonStriker: null },
+    bowler: null,
+    lastBowler: null,
+    matchStatus: "not_started",
+    totalBalls: 0,
+    score: { 
+      runs: 0, 
+      wickets: 0, 
+      extras: { ...defaultExtras }, 
+      overs: 0, 
+      balls: 0 
+    },
+    balls: [],
+    freeHit: false,
+    lastBall: null,
+    isLoading: true
   });
-  const [balls, setBalls] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [freeHit, setFreeHit] = useState(false);
-  const [lastBall, setLastBall] = useState(null);
+
+  const overProgress = useMemo(() => 
+    `${gameState.score.overs}.${gameState.score.balls}`,
+    [gameState.score.overs, gameState.score.balls]
+  );
 
   useEffect(() => {
     if (!matchId) return;
@@ -57,119 +65,51 @@ export default function ScorerDashboard() {
         const matchRef = doc(firestoreDB, "matches", matchId);
         const matchSnap = await getDoc(matchRef);
         if (matchSnap.exists()) {
-          setMatch(matchSnap.data());
+          setGameState(prev => ({ ...prev, match: matchSnap.data() }));
         }
       } catch (error) {
         console.error("Error fetching match:", error);
       }
     };
 
-    const unsubscribeInnings = onValue(ref(db, `matches/${matchId}/currentInnings`), (snapshot) => {
-      setCurrentInnings(safeNumber(snapshot.val(), 1));
-    });
-
-    const unsubscribeStatus = onValue(ref(db, `matches/${matchId}/status`), (snapshot) => {
-      setMatchStatus(snapshot.val() || "not_started");
-    });
-
-    const unsubscribeBalls = onValue(ref(db, `matches/${matchId}/currentBall`), (snapshot) => {
-      setTotalBalls(safeNumber(snapshot.val()));
-    });
-
-    const unsubscribeScore = onValue(ref(db, `matches/${matchId}/innings/${currentInnings}/score`), (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        setScore({
-          runs: safeNumber(data.runs),
-          wickets: safeNumber(data.wickets),
-          extras: data.extras || { ...defaultExtras },
-          overs: Math.floor(safeNumber(data.balls) / 6),
-          balls: safeNumber(data.balls) % 6
-        });
+    const unsubscribe = onValue(ref(db, `matches/${matchId}`), (snapshot) => {
+      if (!snapshot.exists()) {
+        setGameState(prev => ({ ...prev, isLoading: false }));
+        return;
       }
-      setIsLoading(false);
-    });
 
-    const unsubscribeBallsHistory = onValue(ref(db, `matches/${matchId}/innings/${currentInnings}/balls`), (snapshot) => {
-      if (snapshot.exists()) {
-        const ballsData = snapshot.val();
-        const ballsArray = Object.entries(ballsData)
-          .map(([id, ball]) => ({ id, ...ball }))
-          .sort((a, b) => safeNumber(a.timestamp) - safeNumber(b.timestamp));
-        setBalls(ballsArray);
-      } else {
-        setBalls([]);
-      }
-    });
+      const data = snapshot.val();
+      const currentInnings = safeNumber(data.currentInnings, 1);
+      const inningsData = data.innings?.[currentInnings] || {};
+      const scoreData = inningsData.score || {};
+      const ballsData = inningsData.balls || {};
 
-    const unsubscribeLastBall = onValue(ref(db, `matches/${matchId}/innings/${currentInnings}/lastBall`), (snapshot) => {
-      if (snapshot.exists()) {
-        const ball = snapshot.val();
-        setLastBall(ball);
-        setFreeHit(ball?.extras?.noball ? true : false);
-      } else {
-        setLastBall(null);
-        setFreeHit(false);
-      }
+      setGameState(prev => ({
+        ...prev,
+        currentInnings,
+        matchStatus: data.status || "not_started",
+        totalBalls: safeNumber(data.currentBall, 0),
+        score: {
+          runs: safeNumber(scoreData.runs),
+          wickets: safeNumber(scoreData.wickets),
+          extras: scoreData.extras || { ...defaultExtras },
+          overs: Math.floor(safeNumber(scoreData.balls) / 6),
+          balls: safeNumber(scoreData.balls) % 6
+        },
+        balls: Object.values(ballsData).sort((a, b) => safeNumber(a.timestamp) - safeNumber(b.timestamp)),
+        lastBall: inningsData.lastBall || null,
+        freeHit: inningsData.lastBall?.extras?.noball ? true : false,
+        isLoading: false
+      }));
     });
 
     fetchMatch();
+    return () => unsubscribe();
+  }, [matchId]);
 
-    return () => {
-      unsubscribeInnings();
-      unsubscribeStatus();
-      unsubscribeBalls();
-      unsubscribeScore();
-      unsubscribeBallsHistory();
-      unsubscribeLastBall();
-    };
-  }, [matchId, currentInnings]);
-
-  const overProgress = `${score.overs}.${score.balls}`;
-
-  const recordBall = async (ballData) => {
-    if (!batsmen.striker || !batsmen.nonStriker || !bowler) {
-      alert("Please select both batsmen and bowler before recording a ball");
-      return false;
-    }
-
-    try {
-      const inningsPath = `matches/${matchId}/innings/${currentInnings}`;
-      const newBallRef = push(ref(db, `${inningsPath}/balls`));
-      
-      const completeBallData = {
-        ...ballData,
-        batsman: batsmen.striker,
-        nonStriker: batsmen.nonStriker,
-        bowler: bowler,
-        timestamp: Date.now(),
-        over: safeNumber(score.overs),
-        ball: safeNumber(score.balls) + 1,
-        isFreeHit: freeHit,
-        runs: safeNumber(ballData.runs, 0),
-        extras: {
-          wides: safeNumber(ballData.extras?.wide, 0),
-          noballs: safeNumber(ballData.extras?.noball, 0),
-          byes: safeNumber(ballData.extras?.byes, 0),
-          legbyes: safeNumber(ballData.extras?.legbyes, 0),
-          penalty: safeNumber(ballData.extras?.penalty, 0),
-        },
-        wicket: ballData.wicket || null
-      };
-
-      await set(newBallRef, completeBallData);
-      await set(ref(db, `${inningsPath}/lastBall`), completeBallData);
-      await updatePlayerStats(completeBallData);
-      
-      return true;
-    } catch (error) {
-      console.error("Error recording ball:", error);
-      return false;
-    }
-  };
-
-  const updatePlayerStats = async (ballData) => {
-    const inningsPath = `matches/${matchId}/innings/${currentInnings}/playerStats`;
+  const updatePlayerStats = useCallback(async (ballData) => {
+    const { currentInnings } = gameState;
+    const inningsPath = `matches/${matchId}/playerStats/${currentInnings}/playerStats`;
     
     // Update batsman stats
     if (ballData.batsman) {
@@ -183,7 +123,7 @@ export default function ScorerDashboard() {
         status: 'batting'
       };
 
-      let updates = {};
+      const updates = {};
       
       if (!ballData.wicket) {
         updates.runs = safeNumber(currentStats.runs, 0) + safeNumber(ballData.runs, 0);
@@ -211,7 +151,7 @@ export default function ScorerDashboard() {
         noballs: 0
       };
 
-      let updates = {
+      const updates = {
         balls: safeNumber(currentStats.balls, 0) + (ballData.extras?.wide || ballData.extras?.noball ? 0 : 1),
         runs: safeNumber(currentStats.runs, 0) + 
               safeNumber(ballData.runs, 0) + 
@@ -233,9 +173,51 @@ export default function ScorerDashboard() {
 
       await update(bowlerRef, updates);
     }
-  };
+  }, [gameState.currentInnings, matchId]);
 
-  const handleScoreUpdate = async (runs, extras = {}) => {
+  const recordBall = useCallback(async (ballData) => {
+    const { batsmen, bowler, freeHit, score, currentInnings } = gameState;
+    
+    if (!batsmen.striker || !batsmen.nonStriker || !bowler) {
+      alert("Please select both batsmen and bowler before recording a ball");
+      return false;
+    }
+
+    try {
+      const inningsPath = `matches/${matchId}/innings/${currentInnings}`;
+      const newBallId = push(ref(db, `${inningsPath}/balls`)).key;
+
+      const completeBallData = {
+        ...ballData,
+        batsman: batsmen.striker,
+        nonStriker: batsmen.nonStriker,
+        bowler,
+        timestamp: Date.now(),
+        over: safeNumber(score.overs),
+        ball: safeNumber(score.balls) + 1,
+        isFreeHit: freeHit,
+        extras: ballData.extras || {},
+        wicket: ballData.wicket || null
+      };
+
+      const updates = {
+        [`${inningsPath}/balls/${newBallId}`]: completeBallData,
+        [`${inningsPath}/lastBall`]: completeBallData
+      };
+
+      await update(ref(db), updates);
+      await updatePlayerStats(completeBallData);
+      
+      return true;
+    } catch (error) {
+      console.error("Error recording ball:", error);
+      return false;
+    }
+  }, [gameState, matchId, updatePlayerStats]);
+
+  const handleScoreUpdate = useCallback(async (runs, extras = {}) => {
+    const { batsmen, bowler, currentInnings, totalBalls, score } = gameState;
+    
     if (!batsmen.striker || !batsmen.nonStriker || !bowler) {
       alert("Please select both batsmen and bowler before scoring");
       return;
@@ -261,64 +243,37 @@ export default function ScorerDashboard() {
       0
     );
     
+    const updates = {
+      [`matches/${matchId}/currentBall`]: isExtraBall ? totalBalls : totalBalls + 1,
+      [`matches/${matchId}/innings/${currentInnings}/score/runs`]: safeNumber(score.runs) + runsToAdd,
+      [`matches/${matchId}/innings/${currentInnings}/score/extras/wides`]: safeNumber(score.extras.wides) + extrasValue.wide,
+      [`matches/${matchId}/innings/${currentInnings}/score/extras/noballs`]: safeNumber(score.extras.noballs) + extrasValue.noball,
+      [`matches/${matchId}/innings/${currentInnings}/score/extras/byes`]: safeNumber(score.extras.byes) + extrasValue.byes,
+      [`matches/${matchId}/innings/${currentInnings}/score/extras/legbyes`]: safeNumber(score.extras.legbyes) + extrasValue.legbyes,
+      [`matches/${matchId}/innings/${currentInnings}/score/extras/penalty`]: safeNumber(score.extras.penalty) + extrasValue.penalty,
+      [`matches/${matchId}/innings/${currentInnings}/score/balls`]: isExtraBall ? safeNumber(score.balls) : safeNumber(score.balls) + 1
+    };
+
+    await update(ref(db), updates);
     await recordBall({
       runs: runsValue,
       extras: extrasValue,
       wicket: null,
     });
+
+    setGameState(prev => ({
+      ...prev,
+      freeHit: extrasValue.noball > 0 ? true : !isExtraBall ? false : prev.freeHit,
+      batsmen: (runsValue % 2 !== 0 && (safeNumber(score.balls) + 1) % 6 !== 0) ? {
+        striker: prev.batsmen.nonStriker,
+        nonStriker: prev.batsmen.striker
+      } : prev.batsmen
+    }));
+  }, [gameState, matchId, recordBall]);
+
+  const handleWicket = useCallback(async (wicketData) => {
+    const { batsmen, bowler, freeHit, currentInnings, totalBalls, score } = gameState;
     
-    const teamPath = currentInnings === 1 ? "teamA" : "teamB";
-    const scoreRef = ref(db, `matches/${matchId}/score/${teamPath}`);
-    const snapshot = await get(scoreRef);
-    const currentScore = snapshot.exists() ? snapshot.val() : { runs: 0, wickets: 0, balls: 0 };
-    
-    await set(scoreRef, {
-      runs: safeNumber(currentScore.runs, 0) + runsToAdd,
-      wickets: safeNumber(currentScore.wickets, 0),
-      balls: safeNumber(currentScore.balls, 0) + (isExtraBall ? 0 : 1),
-    });
-
-    const inningsPath = `matches/${matchId}/innings/${currentInnings}/score`;
-    const inningsSnapshot = await get(ref(db, inningsPath));
-    const inningsScore = inningsSnapshot.exists() ? inningsSnapshot.val() : { 
-      runs: 0, 
-      wickets: 0, 
-      balls: 0,
-      extras: { ...defaultExtras }
-    };
-    
-    await set(ref(db, inningsPath), {
-      runs: safeNumber(inningsScore.runs, 0) + runsToAdd,
-      wickets: safeNumber(inningsScore.wickets, 0),
-      balls: safeNumber(inningsScore.balls, 0) + (isExtraBall ? 0 : 1),
-      extras: {
-        wides: safeNumber(inningsScore.extras?.wides, 0) + extrasValue.wide,
-        noballs: safeNumber(inningsScore.extras?.noballs, 0) + extrasValue.noball,
-        byes: safeNumber(inningsScore.extras?.byes, 0) + extrasValue.byes,
-        legbyes: safeNumber(inningsScore.extras?.legbyes, 0) + extrasValue.legbyes,
-        penalty: safeNumber(inningsScore.extras?.penalty, 0) + extrasValue.penalty,
-      }
-    });
-
-    if (!isExtraBall) {
-      await set(ref(db, `matches/${matchId}/currentBall`), safeNumber(totalBalls, 0) + 1);
-    }
-
-    if (extrasValue.noball > 0) {
-      setFreeHit(true);
-    } else if (!isExtraBall) {
-      setFreeHit(false);
-    }
-
-    if (runsValue % 2 !== 0 && (safeNumber(score.balls) + 1) % 6 !== 0) {
-      setBatsmen(prev => ({
-        striker: prev.nonStriker,
-        nonStriker: prev.striker
-      }));
-    }
-  };
-
-  const handleWicket = async (wicketData) => {
     if (!batsmen.striker || !batsmen.nonStriker || !bowler) {
       alert("Please select both batsmen and bowler before recording a wicket");
       return;
@@ -362,138 +317,77 @@ export default function ScorerDashboard() {
 
       if (!success) return;
 
-      const teamPath = currentInnings === 1 ? "teamA" : "teamB";
-      const scoreRef = ref(db, `matches/${matchId}/score/${teamPath}`);
-      const snapshot = await get(scoreRef);
-      const currentScore = snapshot.exists() ? snapshot.val() : { runs: 0, wickets: 0, balls: 0 };
-      
-      await set(scoreRef, {
-        runs: safeNumber(currentScore.runs, 0) + runsToAdd,
-        wickets: safeNumber(currentScore.wickets, 0) + 1,
-        balls: safeNumber(currentScore.balls, 0) + (isExtraBall ? 0 : 1),
-      });
-
-      const inningsPath = `matches/${matchId}/innings/${currentInnings}/score`;
-      const inningsSnapshot = await get(ref(db, inningsPath));
-      const inningsScore = inningsSnapshot.exists() ? inningsSnapshot.val() : { 
-        runs: 0, 
-        wickets: 0, 
-        balls: 0,
-        extras: { ...defaultExtras }
+      const updates = {
+        [`matches/${matchId}/currentBall`]: isExtraBall ? totalBalls : totalBalls + 1,
+        [`matches/${matchId}/innings/${currentInnings}/score/runs`]: safeNumber(score.runs) + runsToAdd,
+        [`matches/${matchId}/innings/${currentInnings}/score/wickets`]: safeNumber(score.wickets) + 1,
+        [`matches/${matchId}/innings/${currentInnings}/score/extras/wides`]: safeNumber(score.extras.wides) + extrasValue.wide,
+        [`matches/${matchId}/innings/${currentInnings}/score/extras/noballs`]: safeNumber(score.extras.noballs) + extrasValue.noball,
+        [`matches/${matchId}/innings/${currentInnings}/score/extras/byes`]: safeNumber(score.extras.byes) + extrasValue.byes,
+        [`matches/${matchId}/innings/${currentInnings}/score/extras/legbyes`]: safeNumber(score.extras.legbyes) + extrasValue.legbyes,
+        [`matches/${matchId}/innings/${currentInnings}/score/extras/penalty`]: safeNumber(score.extras.penalty) + extrasValue.penalty,
+        [`matches/${matchId}/innings/${currentInnings}/score/balls`]: isExtraBall ? safeNumber(score.balls) : safeNumber(score.balls) + 1
       };
-      
-      await set(ref(db, inningsPath), {
-        runs: safeNumber(inningsScore.runs, 0) + runsToAdd,
-        wickets: safeNumber(inningsScore.wickets, 0) + 1,
-        balls: safeNumber(inningsScore.balls, 0) + (isExtraBall ? 0 : 1),
-        extras: {
-          wides: safeNumber(inningsScore.extras?.wides, 0) + extrasValue.wide,
-          noballs: safeNumber(inningsScore.extras?.noballs, 0) + extrasValue.noball,
-          byes: safeNumber(inningsScore.extras?.byes, 0) + extrasValue.byes,
-          legbyes: safeNumber(inningsScore.extras?.legbyes, 0) + extrasValue.legbyes,
-          penalty: safeNumber(inningsScore.extras?.penalty, 0) + extrasValue.penalty,
-        }
-      });
 
-      if (!isExtraBall) {
-        await set(ref(db, `matches/${matchId}/currentBall`), safeNumber(totalBalls, 0) + 1);
-      }
+      await update(ref(db), updates);
 
       const newBatsman = prompt("Enter name of new batsman coming in:");
       if (newBatsman) {
         const newBatsmanData = { id: Date.now().toString(), name: newBatsman };
-        setBatsmen(prev => ({
-          ...prev,
-          striker: newBatsmanData
-        }));
         
-        const newBatsmanRef = ref(db, `matches/${matchId}/innings/${currentInnings}/playerStats/${newBatsmanData.id}`);
-        await set(newBatsmanRef, {
+        await set(ref(db, `matches/${matchId}/innings/${currentInnings}/playerStats/${newBatsmanData.id}`), {
           runs: 0,
           balls: 0,
           fours: 0,
           sixes: 0,
           status: 'batting'
         });
-      } else {
-        setBatsmen(prev => ({
+
+        setGameState(prev => ({
           ...prev,
-          striker: null
+          batsmen: {
+            ...prev.batsmen,
+            striker: newBatsmanData
+          }
         }));
       }
-
     } catch (error) {
       console.error("Error handling wicket:", error);
       alert("Failed to record wicket. Please check console for details.");
     }
-  };
+  }, [gameState, matchId, recordBall]);
 
-  const handleOverComplete = async () => {
+  const handleOverComplete = useCallback(async () => {
+    const { batsmen, bowler } = gameState;
+    
     if (!batsmen.striker || !batsmen.nonStriker) {
       alert("Please select both batsmen before completing the over");
       return;
     }
 
-    setBatsmen(prev => ({
-      striker: prev.nonStriker,
-      nonStriker: prev.striker
+    setGameState(prev => ({
+      ...prev,
+      batsmen: {
+        striker: prev.batsmen.nonStriker,
+        nonStriker: prev.batsmen.striker
+      },
+      lastBowler: prev.bowler,
+      bowler: null
     }));
 
-    setLastBowler(bowler);
-    setBowler(null);
-
     alert("Please select a new bowler for the next over");
-  };
+  }, [gameState]);
 
-  const startMatch = async () => {
-    await set(ref(db, `matches/${matchId}/status`), "in_progress");
-    await set(ref(db, `matches/${matchId}/currentInnings`), 1);
-    await set(ref(db, `matches/${matchId}/currentBall`), 0);
-    
-    await set(ref(db, `matches/${matchId}/innings/1`), {
-      startedAt: Date.now(),
-      status: "in_progress",
-      battingTeam: "teamA",
-      bowlingTeam: "teamB",
-      score: {
-        runs: 0,
-        wickets: 0,
-        balls: 0,
-        extras: { ...defaultExtras }
-      },
-      balls: {},
-      playerStats: {},
-      currentBatsmen: {
-        striker: null,
-        nonStriker: null
-      },
-      currentBowler: null
-    });
-    
-    await set(ref(db, `matches/${matchId}/score`), {
-      teamA: { runs: 0, wickets: 0, balls: 0 },
-      teamB: { runs: 0, wickets: 0, balls: 0 }
-    });
-
-    const matchRef = doc(firestoreDB, "matches", matchId);
-    await updateDoc(matchRef, {
-      status: "in_progress",
-      startTime: new Date().toISOString()
-    });
-  };
-
-  const endInnings = async () => {
-    await set(ref(db, `matches/${matchId}/innings/${currentInnings}/status`), "completed");
-    
-    if (currentInnings === 1) {
-      await set(ref(db, `matches/${matchId}/currentInnings`), 2);
-      await set(ref(db, `matches/${matchId}/currentBall`), 0);
-      
-      await set(ref(db, `matches/${matchId}/innings/2`), {
+  const startMatch = useCallback(async () => {
+    const updates = {
+      [`matches/${matchId}/status`]: "in_progress",
+      [`matches/${matchId}/currentInnings`]: 1,
+      [`matches/${matchId}/currentBall`]: 0,
+      [`matches/${matchId}/innings/1`]: {
         startedAt: Date.now(),
         status: "in_progress",
-        battingTeam: "teamB",
-        bowlingTeam: "teamA",
+        battingTeam: "teamA",
+        bowlingTeam: "teamB",
         score: {
           runs: 0,
           wickets: 0,
@@ -507,7 +401,53 @@ export default function ScorerDashboard() {
           nonStriker: null
         },
         currentBowler: null
-      });
+      },
+      [`matches/${matchId}/score`]: {
+        teamA: { runs: 0, wickets: 0, balls: 0 },
+        teamB: { runs: 0, wickets: 0, balls: 0 }
+      }
+    };
+
+    await update(ref(db), updates);
+
+    const matchRef = doc(firestoreDB, "matches", matchId);
+    await updateDoc(matchRef, {
+      status: "in_progress",
+      startTime: new Date().toISOString()
+    });
+  }, [matchId]);
+
+  const endInnings = useCallback(async () => {
+    const { currentInnings } = gameState;
+    
+    await set(ref(db, `matches/${matchId}/innings/${currentInnings}/status`), "completed");
+    
+    if (currentInnings === 1) {
+      const updates = {
+        [`matches/${matchId}/currentInnings`]: 2,
+        [`matches/${matchId}/currentBall`]: 0,
+        [`matches/${matchId}/innings/2`]: {
+          startedAt: Date.now(),
+          status: "in_progress",
+          battingTeam: "teamB",
+          bowlingTeam: "teamA",
+          score: {
+            runs: 0,
+            wickets: 0,
+            balls: 0,
+            extras: { ...defaultExtras }
+          },
+          balls: {},
+          playerStats: {},
+          currentBatsmen: {
+            striker: null,
+            nonStriker: null
+          },
+          currentBowler: null
+        }
+      };
+      
+      await update(ref(db), updates);
     } else {
       await set(ref(db, `matches/${matchId}/status`), "completed");
       
@@ -517,7 +457,11 @@ export default function ScorerDashboard() {
         endTime: new Date().toISOString()
       });
     }
-  };
+  }, [gameState.currentInnings, matchId]);
+
+  if (gameState.isLoading) {
+    return <div className="max-w-6xl mx-auto p-4">Loading match data...</div>;
+  }
 
   return (
     <div className="max-w-6xl mx-auto p-4">
@@ -529,7 +473,7 @@ export default function ScorerDashboard() {
       </button>
 
       <h1 className="text-2xl font-bold mb-6">
-        {match?.teamA} vs {match?.teamB} - Scorer Dashboard
+        {gameState.match?.teamA} vs {gameState.match?.teamB} - Scorer Dashboard
       </h1>
 
       <div className="mb-4 bg-white p-4 rounded shadow">
@@ -538,15 +482,15 @@ export default function ScorerDashboard() {
             <p>Current Over: {overProgress}</p>
             <p>Match Status: 
               <span className={`font-bold ${
-                matchStatus === "in_progress" ? "text-green-500" : 
-                matchStatus === "completed" ? "text-red-500" : "text-gray-500"
+                gameState.matchStatus === "in_progress" ? "text-green-500" : 
+                gameState.matchStatus === "completed" ? "text-red-500" : "text-gray-500"
               }`}>
-                {matchStatus === "not_started" ? "Not Started" : 
-                 matchStatus === "in_progress" ? "In Progress" : "Completed"}
+                {gameState.matchStatus === "not_started" ? "Not Started" : 
+                 gameState.matchStatus === "in_progress" ? "In Progress" : "Completed"}
               </span>
             </p>
           </div>
-          {freeHit && (
+          {gameState.freeHit && (
             <div className="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-2 rounded">
               FREE HIT ACTIVE
             </div>
@@ -554,7 +498,7 @@ export default function ScorerDashboard() {
         </div>
       </div>
 
-      {matchStatus === "not_started" && (
+      {gameState.matchStatus === "not_started" && (
         <button
           onClick={startMatch}
           className="bg-green-500 text-white px-4 py-2 rounded mb-6 hover:bg-green-600"
@@ -563,32 +507,32 @@ export default function ScorerDashboard() {
         </button>
       )}
 
-      {matchStatus === "in_progress" && (
+      {gameState.matchStatus === "in_progress" && (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           <div className="lg:col-span-3 space-y-6">
             <ScoreDisplay 
-              score={score} 
+              score={gameState.score} 
               overProgress={overProgress} 
-              batsmen={batsmen} 
-              bowler={bowler} 
-              freeHit={freeHit}
+              batsmen={gameState.batsmen} 
+              bowler={gameState.bowler} 
+              freeHit={gameState.freeHit}
             />
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <PlayerSelector
-                team={currentInnings === 1 ? "A" : "B"}
+                team={gameState.currentInnings === 1 ? "A" : "B"}
                 role="Striker"
                 onSelect={(player) =>
-                  setBatsmen((prev) => ({ ...prev, striker: player }))
+                  setGameState(prev => ({ ...prev, batsmen: { ...prev.batsmen, striker: player } }))
                 }
                 lastBowler={null}
                 matchId={matchId}
               />
               <PlayerSelector
-                team={currentInnings === 1 ? "A" : "B"}
+                team={gameState.currentInnings === 1 ? "A" : "B"}
                 role="Non-Striker"
                 onSelect={(player) =>
-                  setBatsmen((prev) => ({ ...prev, nonStriker: player }))
+                  setGameState(prev => ({ ...prev, batsmen: { ...prev.batsmen, nonStriker: player } }))
                 }
                 lastBowler={null}
                 matchId={matchId}
@@ -596,68 +540,77 @@ export default function ScorerDashboard() {
             </div>
 
             <PlayerSelector
-              team={currentInnings === 1 ? "B" : "A"}
+              team={gameState.currentInnings === 1 ? "B" : "A"}
               role="Bowler"
-              onSelect={setBowler}
-              lastBowler={lastBowler}
+              onSelect={(bowler) => setGameState(prev => ({ ...prev, bowler }))}
+              lastBowler={gameState.lastBowler}
               matchId={matchId}
             />
 
             <ScoreControls 
               onScoreUpdate={handleScoreUpdate} 
-              batsmen={batsmen} 
-              bowler={bowler}
+              batsmen={gameState.batsmen} 
+              bowler={gameState.bowler}
             />
             <WicketSelector 
               onWicket={handleWicket} 
-              batsmen={batsmen} 
-              bowler={bowler}
-              freeHit={freeHit}
+              batsmen={gameState.batsmen} 
+              bowler={gameState.bowler}
+              freeHit={gameState.freeHit}
             />
           </div>
 
           <div className="space-y-6">
             <InningsControls 
-              matchStatus={matchStatus}
-              score={score}
-              currentInnings={currentInnings}
+              matchStatus={gameState.matchStatus}
+              score={gameState.score}
+              currentInnings={gameState.currentInnings}
               onOverComplete={handleOverComplete}
               onEndInnings={endInnings}
             />
 
-            {batsmen.striker && (
+            {gameState.batsmen.striker && (
               <BatsmanStats 
-                batsman={batsmen.striker} 
-                matchId={matchId} 
-                currentInnings={currentInnings}
+                matchId={matchId}
+                batsmanId={gameState.batsmen.striker.id}
+                currentInnings={gameState.currentInnings}
+                onStrikeChange={() => {
+                  setGameState(prev => ({
+                    ...prev,
+                    batsmen: {
+                      striker: prev.batsmen.nonStriker,
+                      nonStriker: prev.batsmen.striker
+                    }
+                  }));
+                }}
               />
             )}
 
-            {bowler && (
+            {gameState.bowler && (
               <BowlerStats 
-                bowler={bowler} 
+                bowler={gameState.bowler} 
                 matchId={matchId} 
-                currentInnings={currentInnings}
+                currentInnings={gameState.currentInnings}
               />
             )}
 
-            <BallHistory balls={balls} />
+            <BallHistory balls={gameState.balls} />
           </div>
         </div>
       )}
 
-      {matchStatus === "completed" && (
+      {gameState.matchStatus === "completed" && (
         <div className="bg-white p-4 rounded shadow">
           <h2 className="text-xl font-bold mb-4">Match Completed</h2>
           <p>Final Score:</p>
           <div className="grid grid-cols-2 gap-4 mt-4">
             <div className="border p-4 rounded">
-              <h3 className="font-bold">{match?.teamA}</h3>
-              <p>{score.runs}/{score.wickets} ({overProgress} overs)</p>
+              <h3 className="font-bold">{gameState.match?.teamA}</h3>
+              <p>{gameState.score.runs}/{gameState.score.wickets} ({overProgress} overs)</p>
             </div>
             <div className="border p-4 rounded">
-              <h3 className="font-bold">{match?.teamB}</h3>
-              <p>{score.runs}/{score.wickets} ({overProgress} overs)</p>
+              <h3 className="font-bold">{gameState.match?.teamB}</h3>
+              <p>{gameState.score.runs}/{gameState.score.wickets} ({overProgress} overs)</p>
             </div>
           </div>
         </div>
