@@ -1,57 +1,41 @@
-"use client";
-import { useEffect, useState } from 'react';
-import { ref, onValue } from 'firebase/database';
-import { db } from '@/lib/firebase';
+import { useEffect, useState } from "react";
+import { ref, onValue } from "firebase/database";
+import { db } from "@/lib/firebase";
 
-export default function BowlerStats({ matchId, bowlerId }) {
-  const [stats, setStats] = useState({
-    overs: 0,
-    maidens: 0,
-    runs: 0,
-    wickets: 0,
-    economy: 0
-  });
+export default function BowlerStats({ bowler, matchId, currentInnings }) {
+  const [stats, setStats] = useState(null);
 
   useEffect(() => {
-    if (!matchId || !bowlerId) return;
-    
-    const statsRef = ref(db, `matches/${matchId}/playerStats/${bowlerId}`);
-    onValue(statsRef, (snapshot) => {
-      const data = snapshot.val() || {};
-      setStats({
-        overs: data.overs || 0,
-        maidens: data.maidens || 0,
-        runs: data.runs || 0,
-        wickets: data.wickets || 0,
-        economy: data.economy || 0
-      });
+    if (!matchId || !bowler || !currentInnings) return;
+
+    const statsRef = ref(db, `matches/${matchId}/innings/${currentInnings}/playerStats/${bowler.id}`);
+    const unsubscribe = onValue(statsRef, (snapshot) => {
+      if (snapshot.exists()) {
+        setStats(snapshot.val());
+      } else {
+        setStats(null);
+      }
     });
-  }, [matchId, bowlerId]);
+
+    return () => unsubscribe();
+  }, [matchId, bowler, currentInnings]);
+
+  if (!bowler) return <div className="bg-white p-4 rounded shadow">No bowler selected</div>;
+  if (!stats) return <div className="bg-white p-4 rounded shadow">Loading bowler stats...</div>;
 
   return (
-    <div className="bg-white p-4 rounded-lg shadow-md mb-4">
-      <h2 className="text-xl font-bold mb-4">Bowler Stats</h2>
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <p className="text-sm text-gray-500">Overs</p>
-          <p className="text-2xl font-bold">{stats.overs.toFixed(1)}</p>
-        </div>
-        <div>
-          <p className="text-sm text-gray-500">Maidens</p>
-          <p className="text-2xl font-bold">{stats.maidens}</p>
-        </div>
-        <div>
-          <p className="text-sm text-gray-500">Runs</p>
-          <p className="text-2xl font-bold">{stats.runs}</p>
-        </div>
-        <div>
-          <p className="text-sm text-gray-500">Wickets</p>
-          <p className="text-2xl font-bold">{stats.wickets}</p>
-        </div>
-        <div className="col-span-2">
-          <p className="text-sm text-gray-500">Economy</p>
-          <p className="text-2xl font-bold">{stats.economy.toFixed(2)}</p>
-        </div>
+    <div className="bg-white p-4 rounded shadow">
+      <h3 className="font-bold mb-2">{bowler.name} - Bowling</h3>
+      <div className="grid grid-cols-2 gap-2">
+        <p>Overs: <span className="font-bold">{(stats.balls / 6).toFixed(1)}</span></p>
+        <p>Maidens: <span className="font-bold">{stats.maidens || 0}</span></p>
+        <p>Runs: <span className="font-bold">{stats.runs || 0}</span></p>
+        <p>Wickets: <span className="font-bold">{stats.wickets || 0}</span></p>
+        <p>Wides: <span className="font-bold">{stats.wides || 0}</span></p>
+        <p>No Balls: <span className="font-bold">{stats.noballs || 0}</span></p>
+        <p>Economy: <span className="font-bold">
+          {stats.balls ? ((stats.runs / stats.balls) * 6).toFixed(2) : 0}
+        </span></p>
       </div>
     </div>
   );

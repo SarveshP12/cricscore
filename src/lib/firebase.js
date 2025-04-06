@@ -13,12 +13,11 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
 };
 
-// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 
 // Initialize services
-const realtimeDB = getDatabase(app);
+const db = getDatabase(app);  // Changed from realtimeDB to db
 const firestoreDB = getFirestore(app);
 
 // Export the services
-export { realtimeDB as db, firestoreDB };
+export { db, firestoreDB };  // Now exports db directly

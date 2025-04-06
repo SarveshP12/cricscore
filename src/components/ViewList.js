@@ -76,7 +76,7 @@ export default function MatchList() {
       {matches.map(match => (
         <div 
           key={match.id} 
-          onClick={() => router.push(`/matches/${match.id}`)}
+          onClick={() => router.push(`/view-match/${match.id}`)}
           className="cursor-pointer"
         >
           <MatchCard match={match} />

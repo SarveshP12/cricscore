@@ -1,11 +1,18 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { firestoreDB, db } from "@/lib/firebase";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
-import { ref, onValue, push, set, get, update } from "firebase/database";
+import { ref, onValue, push, update, get } from "firebase/database";
+import ScoreDisplay from "@/components/ScoreDisplay";
+import BallHistory from "@/components/BallHistory";
+import PlayerSelector from "@/components/PlayerSelector";
+import ScoreControls from "@/components/ScoreControls";
+import WicketSelector from "@/components/WicketSelector";
+import InningsControls from "@/components/InningsControls";
+import BatsmanStats from "@/components/BatsmanStats";
+import BowlerStats from "@/components/BowlerStats";
 
-// Enhanced safeNumber function with strict validation
 const safeNumber = (value, fallback = 0) => {
   if (value === null || value === undefined || value === '') return fallback;
   const num = Number(value);
@@ -23,24 +30,32 @@ const defaultExtras = {
 export default function ScorerDashboard() {
   const { matchId } = useParams();
   const router = useRouter();
-  const [match, setMatch] = useState(null);
-  const [currentInnings, setCurrentInnings] = useState(1);
-  const [batsmen, setBatsmen] = useState({ striker: null, nonStriker: null });
-  const [bowler, setBowler] = useState(null);
-  const [lastBowler, setLastBowler] = useState(null);
-  const [matchStatus, setMatchStatus] = useState("not_started");
-  const [totalBalls, setTotalBalls] = useState(0);
-  const [score, setScore] = useState({
-    runs: 0,
-    wickets: 0,
-    extras: { ...defaultExtras },
-    overs: 0,
-    balls: 0
+  
+  const [gameState, setGameState] = useState({
+    match: null,
+    currentInnings: 1,
+    batsmen: { striker: null, nonStriker: null },
+    bowler: null,
+    lastBowler: null,
+    matchStatus: "not_started",
+    totalBalls: 0,
+    score: { 
+      runs: 0, 
+      wickets: 0, 
+      extras: { ...defaultExtras }, 
+      overs: 0, 
+      balls: 0 
+    },
+    balls: [],
+    freeHit: false,
+    lastBall: null,
+    isLoading: true
   });
-  const [balls, setBalls] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [freeHit, setFreeHit] = useState(false);
-  const [lastBall, setLastBall] = useState(null);
+
+  const overProgress = useMemo(() => 
+    `${gameState.score.overs}.${gameState.score.balls}`,
+    [gameState.score.overs, gameState.score.balls]
+  );
 
   useEffect(() => {
     if (!matchId) return;
@@ -50,119 +65,51 @@ export default function ScorerDashboard() {
         const matchRef = doc(firestoreDB, "matches", matchId);
         const matchSnap = await getDoc(matchRef);
         if (matchSnap.exists()) {
-          setMatch(matchSnap.data());
+          setGameState(prev => ({ ...prev, match: matchSnap.data() }));
         }
       } catch (error) {
         console.error("Error fetching match:", error);
       }
     };
 
-    const unsubscribeInnings = onValue(ref(db, `matches/${matchId}/currentInnings`), (snapshot) => {
-      setCurrentInnings(safeNumber(snapshot.val(), 1));
-    });
-
-    const unsubscribeStatus = onValue(ref(db, `matches/${matchId}/status`), (snapshot) => {
-      setMatchStatus(snapshot.val() || "not_started");
-    });
-
-    const unsubscribeBalls = onValue(ref(db, `matches/${matchId}/currentBall`), (snapshot) => {
-      setTotalBalls(safeNumber(snapshot.val()));
-    });
-
-    const unsubscribeScore = onValue(ref(db, `matches/${matchId}/innings/${currentInnings}/score`), (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        setScore({
-          runs: safeNumber(data.runs),
-          wickets: safeNumber(data.wickets),
-          extras: data.extras || { ...defaultExtras },
-          overs: Math.floor(safeNumber(data.balls) / 6),
-          balls: safeNumber(data.balls) % 6
-        });
+    const unsubscribe = onValue(ref(db, `matches/${matchId}`), (snapshot) => {
+      if (!snapshot.exists()) {
+        setGameState(prev => ({ ...prev, isLoading: false }));
+        return;
       }
-      setIsLoading(false);
-    });
 
-    const unsubscribeBallsHistory = onValue(ref(db, `matches/${matchId}/innings/${currentInnings}/balls`), (snapshot) => {
-      if (snapshot.exists()) {
-        const ballsData = snapshot.val();
-        const ballsArray = Object.entries(ballsData)
-          .map(([id, ball]) => ({ id, ...ball }))
-          .sort((a, b) => safeNumber(a.timestamp) - safeNumber(b.timestamp));
-        setBalls(ballsArray);
-      } else {
-        setBalls([]);
-      }
-    });
+      const data = snapshot.val();
+      const currentInnings = safeNumber(data.currentInnings, 1);
+      const inningsData = data.innings?.[currentInnings] || {};
+      const scoreData = inningsData.score || {};
+      const ballsData = inningsData.balls || {};
 
-    const unsubscribeLastBall = onValue(ref(db, `matches/${matchId}/innings/${currentInnings}/lastBall`), (snapshot) => {
-      if (snapshot.exists()) {
-        const ball = snapshot.val();
-        setLastBall(ball);
-        setFreeHit(ball?.extras?.noball ? true : false);
-      } else {
-        setLastBall(null);
-        setFreeHit(false);
-      }
+      setGameState(prev => ({
+        ...prev,
+        currentInnings,
+        matchStatus: data.status || "not_started",
+        totalBalls: safeNumber(data.currentBall, 0),
+        score: {
+          runs: safeNumber(scoreData.runs),
+          wickets: safeNumber(scoreData.wickets),
+          extras: scoreData.extras || { ...defaultExtras },
+          overs: Math.floor(safeNumber(scoreData.balls) / 6),
+          balls: safeNumber(scoreData.balls) % 6
+        },
+        balls: Object.values(ballsData).sort((a, b) => safeNumber(a.timestamp) - safeNumber(b.timestamp)),
+        lastBall: inningsData.lastBall || null,
+        freeHit: inningsData.lastBall?.extras?.noball ? true : false,
+        isLoading: false
+      }));
     });
 
     fetchMatch();
+    return () => unsubscribe();
+  }, [matchId]);
 
-    return () => {
-      unsubscribeInnings();
-      unsubscribeStatus();
-      unsubscribeBalls();
-      unsubscribeScore();
-      unsubscribeBallsHistory();
-      unsubscribeLastBall();
-    };
-  }, [matchId, currentInnings]);
-
-  const overProgress = `${score.overs}.${score.balls}`;
-
-  const recordBall = async (ballData) => {
-    if (!batsmen.striker || !batsmen.nonStriker || !bowler) {
-      alert("Please select both batsmen and bowler before recording a ball");
-      return false;
-    }
-
-    try {
-      const inningsPath = `matches/${matchId}/innings/${currentInnings}`;
-      const newBallRef = push(ref(db, `${inningsPath}/balls`));
-      
-      const completeBallData = {
-        ...ballData,
-        batsman: batsmen.striker,
-        nonStriker: batsmen.nonStriker,
-        bowler: bowler,
-        timestamp: Date.now(),
-        over: safeNumber(score.overs),
-        ball: safeNumber(score.balls) + 1,
-        isFreeHit: freeHit,
-        runs: safeNumber(ballData.runs, 0),
-        extras: {
-          wides: safeNumber(ballData.extras?.wide, 0),
-          noballs: safeNumber(ballData.extras?.noball, 0),
-          byes: safeNumber(ballData.extras?.byes, 0),
-          legbyes: safeNumber(ballData.extras?.legbyes, 0),
-          penalty: safeNumber(ballData.extras?.penalty, 0),
-        },
-        wicket: ballData.wicket || null
-      };
-
-      await set(newBallRef, completeBallData);
-      await set(ref(db, `${inningsPath}/lastBall`), completeBallData);
-      await updatePlayerStats(completeBallData);
-      
-      return true;
-    } catch (error) {
-      console.error("Error recording ball:", error);
-      return false;
-    }
-  };
-
-  const updatePlayerStats = async (ballData) => {
-    const inningsPath = `matches/${matchId}/innings/${currentInnings}/playerStats`;
+  const updatePlayerStats = useCallback(async (ballData) => {
+    const { currentInnings } = gameState;
+    const inningsPath = `matches/${matchId}/playerStats/${currentInnings}/playerStats`;
     
     // Update batsman stats
     if (ballData.batsman) {
@@ -176,7 +123,7 @@ export default function ScorerDashboard() {
         status: 'batting'
       };
 
-      let updates = {};
+      const updates = {};
       
       if (!ballData.wicket) {
         updates.runs = safeNumber(currentStats.runs, 0) + safeNumber(ballData.runs, 0);
@@ -204,7 +151,7 @@ export default function ScorerDashboard() {
         noballs: 0
       };
 
-      let updates = {
+      const updates = {
         balls: safeNumber(currentStats.balls, 0) + (ballData.extras?.wide || ballData.extras?.noball ? 0 : 1),
         runs: safeNumber(currentStats.runs, 0) + 
               safeNumber(ballData.runs, 0) + 
@@ -226,9 +173,51 @@ export default function ScorerDashboard() {
 
       await update(bowlerRef, updates);
     }
-  };
+  }, [gameState.currentInnings, matchId]);
 
-  const handleScoreUpdate = async (runs, extras = {}) => {
+  const recordBall = useCallback(async (ballData) => {
+    const { batsmen, bowler, freeHit, score, currentInnings } = gameState;
+    
+    if (!batsmen.striker || !batsmen.nonStriker || !bowler) {
+      alert("Please select both batsmen and bowler before recording a ball");
+      return false;
+    }
+
+    try {
+      const inningsPath = `matches/${matchId}/innings/${currentInnings}`;
+      const newBallId = push(ref(db, `${inningsPath}/balls`)).key;
+
+      const completeBallData = {
+        ...ballData,
+        batsman: batsmen.striker,
+        nonStriker: batsmen.nonStriker,
+        bowler,
+        timestamp: Date.now(),
+        over: safeNumber(score.overs),
+        ball: safeNumber(score.balls) + 1,
+        isFreeHit: freeHit,
+        extras: ballData.extras || {},
+        wicket: ballData.wicket || null
+      };
+
+      const updates = {
+        [`${inningsPath}/balls/${newBallId}`]: completeBallData,
+        [`${inningsPath}/lastBall`]: completeBallData
+      };
+
+      await update(ref(db), updates);
+      await updatePlayerStats(completeBallData);
+      
+      return true;
+    } catch (error) {
+      console.error("Error recording ball:", error);
+      return false;
+    }
+  }, [gameState, matchId, updatePlayerStats]);
+
+  const handleScoreUpdate = useCallback(async (runs, extras = {}) => {
+    const { batsmen, bowler, currentInnings, totalBalls, score } = gameState;
+    
     if (!batsmen.striker || !batsmen.nonStriker || !bowler) {
       alert("Please select both batsmen and bowler before scoring");
       return;
@@ -254,64 +243,37 @@ export default function ScorerDashboard() {
       0
     );
     
+    const updates = {
+      [`matches/${matchId}/currentBall`]: isExtraBall ? totalBalls : totalBalls + 1,
+      [`matches/${matchId}/innings/${currentInnings}/score/runs`]: safeNumber(score.runs) + runsToAdd,
+      [`matches/${matchId}/innings/${currentInnings}/score/extras/wides`]: safeNumber(score.extras.wides) + extrasValue.wide,
+      [`matches/${matchId}/innings/${currentInnings}/score/extras/noballs`]: safeNumber(score.extras.noballs) + extrasValue.noball,
+      [`matches/${matchId}/innings/${currentInnings}/score/extras/byes`]: safeNumber(score.extras.byes) + extrasValue.byes,
+      [`matches/${matchId}/innings/${currentInnings}/score/extras/legbyes`]: safeNumber(score.extras.legbyes) + extrasValue.legbyes,
+      [`matches/${matchId}/innings/${currentInnings}/score/extras/penalty`]: safeNumber(score.extras.penalty) + extrasValue.penalty,
+      [`matches/${matchId}/innings/${currentInnings}/score/balls`]: isExtraBall ? safeNumber(score.balls) : safeNumber(score.balls) + 1
+    };
+
+    await update(ref(db), updates);
     await recordBall({
       runs: runsValue,
       extras: extrasValue,
       wicket: null,
     });
+
+    setGameState(prev => ({
+      ...prev,
+      freeHit: extrasValue.noball > 0 ? true : !isExtraBall ? false : prev.freeHit,
+      batsmen: (runsValue % 2 !== 0 && (safeNumber(score.balls) + 1) % 6 !== 0) ? {
+        striker: prev.batsmen.nonStriker,
+        nonStriker: prev.batsmen.striker
+      } : prev.batsmen
+    }));
+  }, [gameState, matchId, recordBall]);
+
+  const handleWicket = useCallback(async (wicketData) => {
+    const { batsmen, bowler, freeHit, currentInnings, totalBalls, score } = gameState;
     
-    const teamPath = currentInnings === 1 ? "teamA" : "teamB";
-    const scoreRef = ref(db, `matches/${matchId}/score/${teamPath}`);
-    const snapshot = await get(scoreRef);
-    const currentScore = snapshot.exists() ? snapshot.val() : { runs: 0, wickets: 0, balls: 0 };
-    
-    await set(scoreRef, {
-      runs: safeNumber(currentScore.runs, 0) + runsToAdd,
-      wickets: safeNumber(currentScore.wickets, 0),
-      balls: safeNumber(currentScore.balls, 0) + (isExtraBall ? 0 : 1),
-    });
-
-    const inningsPath = `matches/${matchId}/innings/${currentInnings}/score`;
-    const inningsSnapshot = await get(ref(db, inningsPath));
-    const inningsScore = inningsSnapshot.exists() ? inningsSnapshot.val() : { 
-      runs: 0, 
-      wickets: 0, 
-      balls: 0,
-      extras: { ...defaultExtras }
-    };
-    
-    await set(ref(db, inningsPath), {
-      runs: safeNumber(inningsScore.runs, 0) + runsToAdd,
-      wickets: safeNumber(inningsScore.wickets, 0),
-      balls: safeNumber(inningsScore.balls, 0) + (isExtraBall ? 0 : 1),
-      extras: {
-        wides: safeNumber(inningsScore.extras?.wides, 0) + extrasValue.wide,
-        noballs: safeNumber(inningsScore.extras?.noballs, 0) + extrasValue.noball,
-        byes: safeNumber(inningsScore.extras?.byes, 0) + extrasValue.byes,
-        legbyes: safeNumber(inningsScore.extras?.legbyes, 0) + extrasValue.legbyes,
-        penalty: safeNumber(inningsScore.extras?.penalty, 0) + extrasValue.penalty,
-      }
-    });
-
-    if (!isExtraBall) {
-      await set(ref(db, `matches/${matchId}/currentBall`), safeNumber(totalBalls, 0) + 1);
-    }
-
-    if (extrasValue.noball > 0) {
-      setFreeHit(true);
-    } else if (!isExtraBall) {
-      setFreeHit(false);
-    }
-
-    if (runsValue % 2 !== 0 && (safeNumber(score.balls) + 1) % 6 !== 0) {
-      setBatsmen(prev => ({
-        striker: prev.nonStriker,
-        nonStriker: prev.striker
-      }));
-    }
-  };
-
-  const handleWicket = async (wicketData) => {
     if (!batsmen.striker || !batsmen.nonStriker || !bowler) {
       alert("Please select both batsmen and bowler before recording a wicket");
       return;
@@ -355,138 +317,77 @@ export default function ScorerDashboard() {
 
       if (!success) return;
 
-      const teamPath = currentInnings === 1 ? "teamA" : "teamB";
-      const scoreRef = ref(db, `matches/${matchId}/score/${teamPath}`);
-      const snapshot = await get(scoreRef);
-      const currentScore = snapshot.exists() ? snapshot.val() : { runs: 0, wickets: 0, balls: 0 };
-      
-      await set(scoreRef, {
-        runs: safeNumber(currentScore.runs, 0) + runsToAdd,
-        wickets: safeNumber(currentScore.wickets, 0) + 1,
-        balls: safeNumber(currentScore.balls, 0) + (isExtraBall ? 0 : 1),
-      });
-
-      const inningsPath = `matches/${matchId}/innings/${currentInnings}/score`;
-      const inningsSnapshot = await get(ref(db, inningsPath));
-      const inningsScore = inningsSnapshot.exists() ? inningsSnapshot.val() : { 
-        runs: 0, 
-        wickets: 0, 
-        balls: 0,
-        extras: { ...defaultExtras }
+      const updates = {
+        [`matches/${matchId}/currentBall`]: isExtraBall ? totalBalls : totalBalls + 1,
+        [`matches/${matchId}/innings/${currentInnings}/score/runs`]: safeNumber(score.runs) + runsToAdd,
+        [`matches/${matchId}/innings/${currentInnings}/score/wickets`]: safeNumber(score.wickets) + 1,
+        [`matches/${matchId}/innings/${currentInnings}/score/extras/wides`]: safeNumber(score.extras.wides) + extrasValue.wide,
+        [`matches/${matchId}/innings/${currentInnings}/score/extras/noballs`]: safeNumber(score.extras.noballs) + extrasValue.noball,
+        [`matches/${matchId}/innings/${currentInnings}/score/extras/byes`]: safeNumber(score.extras.byes) + extrasValue.byes,
+        [`matches/${matchId}/innings/${currentInnings}/score/extras/legbyes`]: safeNumber(score.extras.legbyes) + extrasValue.legbyes,
+        [`matches/${matchId}/innings/${currentInnings}/score/extras/penalty`]: safeNumber(score.extras.penalty) + extrasValue.penalty,
+        [`matches/${matchId}/innings/${currentInnings}/score/balls`]: isExtraBall ? safeNumber(score.balls) : safeNumber(score.balls) + 1
       };
-      
-      await set(ref(db, inningsPath), {
-        runs: safeNumber(inningsScore.runs, 0) + runsToAdd,
-        wickets: safeNumber(inningsScore.wickets, 0) + 1,
-        balls: safeNumber(inningsScore.balls, 0) + (isExtraBall ? 0 : 1),
-        extras: {
-          wides: safeNumber(inningsScore.extras?.wides, 0) + extrasValue.wide,
-          noballs: safeNumber(inningsScore.extras?.noballs, 0) + extrasValue.noball,
-          byes: safeNumber(inningsScore.extras?.byes, 0) + extrasValue.byes,
-          legbyes: safeNumber(inningsScore.extras?.legbyes, 0) + extrasValue.legbyes,
-          penalty: safeNumber(inningsScore.extras?.penalty, 0) + extrasValue.penalty,
-        }
-      });
 
-      if (!isExtraBall) {
-        await set(ref(db, `matches/${matchId}/currentBall`), safeNumber(totalBalls, 0) + 1);
-      }
+      await update(ref(db), updates);
 
       const newBatsman = prompt("Enter name of new batsman coming in:");
       if (newBatsman) {
         const newBatsmanData = { id: Date.now().toString(), name: newBatsman };
-        setBatsmen(prev => ({
-          ...prev,
-          striker: newBatsmanData
-        }));
         
-        const newBatsmanRef = ref(db, `matches/${matchId}/innings/${currentInnings}/playerStats/${newBatsmanData.id}`);
-        await set(newBatsmanRef, {
+        await set(ref(db, `matches/${matchId}/innings/${currentInnings}/playerStats/${newBatsmanData.id}`), {
           runs: 0,
           balls: 0,
           fours: 0,
           sixes: 0,
           status: 'batting'
         });
-      } else {
-        setBatsmen(prev => ({
+
+        setGameState(prev => ({
           ...prev,
-          striker: null
+          batsmen: {
+            ...prev.batsmen,
+            striker: newBatsmanData
+          }
         }));
       }
-
     } catch (error) {
       console.error("Error handling wicket:", error);
       alert("Failed to record wicket. Please check console for details.");
     }
-  };
+  }, [gameState, matchId, recordBall]);
 
-  const handleOverComplete = async () => {
+  const handleOverComplete = useCallback(async () => {
+    const { batsmen, bowler } = gameState;
+    
     if (!batsmen.striker || !batsmen.nonStriker) {
       alert("Please select both batsmen before completing the over");
       return;
     }
 
-    setBatsmen(prev => ({
-      striker: prev.nonStriker,
-      nonStriker: prev.striker
+    setGameState(prev => ({
+      ...prev,
+      batsmen: {
+        striker: prev.batsmen.nonStriker,
+        nonStriker: prev.batsmen.striker
+      },
+      lastBowler: prev.bowler,
+      bowler: null
     }));
 
-    setLastBowler(bowler);
-    setBowler(null);
-
     alert("Please select a new bowler for the next over");
-  };
+  }, [gameState]);
 
-  const startMatch = async () => {
-    await set(ref(db, `matches/${matchId}/status`), "in_progress");
-    await set(ref(db, `matches/${matchId}/currentInnings`), 1);
-    await set(ref(db, `matches/${matchId}/currentBall`), 0);
-    
-    await set(ref(db, `matches/${matchId}/innings/1`), {
-      startedAt: Date.now(),
-      status: "in_progress",
-      battingTeam: "teamA",
-      bowlingTeam: "teamB",
-      score: {
-        runs: 0,
-        wickets: 0,
-        balls: 0,
-        extras: { ...defaultExtras }
-      },
-      balls: {},
-      playerStats: {},
-      currentBatsmen: {
-        striker: null,
-        nonStriker: null
-      },
-      currentBowler: null
-    });
-    
-    await set(ref(db, `matches/${matchId}/score`), {
-      teamA: { runs: 0, wickets: 0, balls: 0 },
-      teamB: { runs: 0, wickets: 0, balls: 0 }
-    });
-
-    const matchRef = doc(firestoreDB, "matches", matchId);
-    await updateDoc(matchRef, {
-      status: "in_progress",
-      startTime: new Date().toISOString()
-    });
-  };
-
-  const endInnings = async () => {
-    await set(ref(db, `matches/${matchId}/innings/${currentInnings}/status`), "completed");
-    
-    if (currentInnings === 1) {
-      await set(ref(db, `matches/${matchId}/currentInnings`), 2);
-      await set(ref(db, `matches/${matchId}/currentBall`), 0);
-      
-      await set(ref(db, `matches/${matchId}/innings/2`), {
+  const startMatch = useCallback(async () => {
+    const updates = {
+      [`matches/${matchId}/status`]: "in_progress",
+      [`matches/${matchId}/currentInnings`]: 1,
+      [`matches/${matchId}/currentBall`]: 0,
+      [`matches/${matchId}/innings/1`]: {
         startedAt: Date.now(),
         status: "in_progress",
-        battingTeam: "teamB",
-        bowlingTeam: "teamA",
+        battingTeam: "teamA",
+        bowlingTeam: "teamB",
         score: {
           runs: 0,
           wickets: 0,
@@ -500,7 +401,53 @@ export default function ScorerDashboard() {
           nonStriker: null
         },
         currentBowler: null
-      });
+      },
+      [`matches/${matchId}/score`]: {
+        teamA: { runs: 0, wickets: 0, balls: 0 },
+        teamB: { runs: 0, wickets: 0, balls: 0 }
+      }
+    };
+
+    await update(ref(db), updates);
+
+    const matchRef = doc(firestoreDB, "matches", matchId);
+    await updateDoc(matchRef, {
+      status: "in_progress",
+      startTime: new Date().toISOString()
+    });
+  }, [matchId]);
+
+  const endInnings = useCallback(async () => {
+    const { currentInnings } = gameState;
+    
+    await set(ref(db, `matches/${matchId}/innings/${currentInnings}/status`), "completed");
+    
+    if (currentInnings === 1) {
+      const updates = {
+        [`matches/${matchId}/currentInnings`]: 2,
+        [`matches/${matchId}/currentBall`]: 0,
+        [`matches/${matchId}/innings/2`]: {
+          startedAt: Date.now(),
+          status: "in_progress",
+          battingTeam: "teamB",
+          bowlingTeam: "teamA",
+          score: {
+            runs: 0,
+            wickets: 0,
+            balls: 0,
+            extras: { ...defaultExtras }
+          },
+          balls: {},
+          playerStats: {},
+          currentBatsmen: {
+            striker: null,
+            nonStriker: null
+          },
+          currentBowler: null
+        }
+      };
+      
+      await update(ref(db), updates);
     } else {
       await set(ref(db, `matches/${matchId}/status`), "completed");
       
@@ -510,510 +457,11 @@ export default function ScorerDashboard() {
         endTime: new Date().toISOString()
       });
     }
-  };
+  }, [gameState.currentInnings, matchId]);
 
-  const ScoreDisplay = () => (
-    <div className="bg-white p-4 rounded shadow">
-      <h3 className="font-bold text-lg mb-2">Current Score</h3>
-      {(!batsmen.striker || !batsmen.nonStriker) && (
-        <p className="text-red-500 text-sm mb-2">⚠️ Please select both batsmen</p>
-      )}
-      {!bowler && (
-        <p className="text-red-500 text-sm mb-2">⚠️ Please select a bowler</p>
-      )}
-      <div className="flex justify-between items-center mb-4">
-        <div className="text-3xl font-bold">
-          {score.runs}/{score.wickets}
-        </div>
-        <div className="text-xl">
-          Overs: {overProgress}
-        </div>
-      </div>
-      <div className="mb-4">
-        <div className="grid grid-cols-2 gap-2 mb-2">
-          <div>
-            <p className="text-sm font-medium">Striker:</p>
-            <p className="font-bold">{batsmen.striker?.name || "Not set"}</p>
-          </div>
-          <div>
-            <p className="text-sm font-medium">Non-Striker:</p>
-            <p className="font-bold">{batsmen.nonStriker?.name || "Not set"}</p>
-          </div>
-        </div>
-        <div className="mb-2">
-          <p className="text-sm font-medium">Bowler:</p>
-          <p className="font-bold">{bowler?.name || "Not set"}</p>
-        </div>
-        <p className="text-sm text-gray-600">
-          Extras: {Object.entries(score.extras)
-            .filter(([_, value]) => value > 0)
-            .map(([type, value]) => `${type}: ${value}`)
-            .join(', ')}
-        </p>
-        {freeHit && (
-          <p className="text-sm text-red-500 font-bold">FREE HIT</p>
-        )}
-      </div>
-    </div>
-  );
-
-  const BallHistory = () => (
-    <div className="bg-white p-4 rounded shadow">
-      <h3 className="font-bold mb-2">Ball History</h3>
-      <div className="space-y-2 max-h-64 overflow-y-auto">
-        {balls.length === 0 ? (
-          <p>No balls recorded yet</p>
-        ) : (
-          balls.map((ball) => (
-            <div 
-              key={ball.id} 
-              className={`border-b pb-2 ${ball.wicket ? 'text-red-500' : ''} ${ball.isFreeHit ? 'bg-yellow-50' : ''}`}
-            >
-              <p>{`${ball.over}.${ball.ball}: ${ball.bowler?.name || 'Bowler'} to ${ball.batsman?.name || 'Batsman'}`}</p>
-              <p className="text-sm">
-                {ball.wicket ? `Wicket (${ball.wicket.type})` :
-                ball.runs > 0 ? `${ball.runs} run${ball.runs > 1 ? 's' : ''}` : "Dot ball"}
-                {ball.extras ? ` + ${Object.entries(ball.extras)
-                  .filter(([_, value]) => value > 0)
-                  .map(([type, value]) => `${type} (${value})`)
-                  .join(', ')}` : ''}
-                {ball.isFreeHit ? ' [FREE HIT]' : ''}
-              </p>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
-
-  const PlayerSelector = ({ team, role, onSelect }) => {
-    const [players, setPlayers] = useState([]);
-    const [selectedPlayer, setSelectedPlayer] = useState("");
-
-    useEffect(() => {
-      if (!matchId || !team) return;
-
-      const teamRef = ref(db, `matches/${matchId}/teams/team${team}/players`);
-      const unsubscribe = onValue(teamRef, (snapshot) => {
-        if (snapshot.exists()) {
-          let playersData = snapshot.val();
-          let playersArray = playersData ? Object.values(playersData) : [];
-          
-          if (role === "Bowler" && lastBowler) {
-            playersArray = playersArray.filter(player => player.id !== lastBowler.id);
-          }
-          
-          setPlayers(playersArray);
-        } else {
-          setPlayers([]);
-        }
-      });
-
-      return () => unsubscribe();
-    }, [matchId, team, lastBowler, role]);
-
-    const handleSelect = (e) => {
-      const playerId = e.target.value;
-      const player = players.find(p => p.id === playerId);
-      setSelectedPlayer(playerId);
-      onSelect(player);
-    };
-
-    return (
-      <div className="bg-white p-4 rounded shadow">
-        <label className="block mb-1 font-medium">{role}</label>
-        <select
-          value={selectedPlayer}
-          onChange={handleSelect}
-          className="w-full p-2 border rounded"
-          disabled={players.length === 0}
-        >
-          <option value="">Select {role}</option>
-          {players.map((player) => (
-            <option key={player.id} value={player.id}>
-              {player.name} ({player.role || 'Player'})
-            </option>
-          ))}
-        </select>
-        {role === "Bowler" && lastBowler && players.length === 0 && (
-          <p className="text-sm text-red-500 mt-1">
-            {lastBowler.name} cannot bowl consecutive overs. Please wait until next over.
-          </p>
-        )}
-      </div>
-    );
-  };
-
-  const ScoreControls = ({ onScoreUpdate }) => {
-    const isDisabled = !batsmen.striker || !batsmen.nonStriker || !bowler;
-
-    const handleRunClick = (runs) => {
-      if (isDisabled) {
-        alert("Please select both batsmen and bowler before scoring");
-        return;
-      }
-      onScoreUpdate(runs);
-    };
-
-    const handleExtra = (extraType) => {
-      if (isDisabled) {
-        alert("Please select both batsmen and bowler before scoring");
-        return;
-      }
-      if (extraType === "wide" || extraType === "noball") {
-        onScoreUpdate(0, { [extraType]: 1 });
-      } else {
-        onScoreUpdate(0, { [extraType]: 1 });
-      }
-    };
-
-    const handlePenalty = () => {
-      if (isDisabled) {
-        alert("Please select both batsmen and bowler before scoring");
-        return;
-      }
-      const runs = parseInt(prompt("Enter penalty runs (usually 5):", "5"));
-      if (!isNaN(runs)) {
-        onScoreUpdate(0, { penalty: runs });
-      }
-    };
-
-    return (
-      <div className="bg-white p-4 rounded shadow">
-        <h3 className="font-bold mb-2">Score Controls</h3>
-        {isDisabled && (
-          <p className="text-red-500 mb-2">Please select batsmen and bowler first</p>
-        )}
-        <div className="grid grid-cols-3 gap-2 mb-4">
-          {[0, 1, 2, 3, 4, 6].map((run) => (
-            <button
-              key={run}
-              onClick={() => handleRunClick(run)}
-              className={`py-2 px-4 rounded ${
-                isDisabled 
-                  ? 'bg-gray-300 cursor-not-allowed' 
-                  : 'bg-blue-500 text-white hover:bg-blue-600'
-              }`}
-              disabled={isDisabled}
-            >
-              {run}
-            </button>
-          ))}
-        </div>
-        <div className="grid grid-cols-2 gap-2 mb-4">
-          <button
-            onClick={() => handleExtra("wide")}
-            className={`py-2 px-4 rounded ${
-              isDisabled 
-                ? 'bg-gray-300 cursor-not-allowed' 
-                : 'bg-yellow-500 text-white hover:bg-yellow-600'
-            }`}
-            disabled={isDisabled}
-          >
-            Wide (+1 run)
-          </button>
-          <button
-            onClick={() => handleExtra("noball")}
-            className={`py-2 px-4 rounded ${
-              isDisabled 
-                ? 'bg-gray-300 cursor-not-allowed' 
-                : 'bg-red-500 text-white hover:bg-red-600'
-            }`}
-            disabled={isDisabled}
-          >
-            No Ball (+1 run)
-          </button>
-          <button
-            onClick={() => handleExtra("byes")}
-            className={`py-2 px-4 rounded ${
-              isDisabled 
-                ? 'bg-gray-300 cursor-not-allowed' 
-                : 'bg-green-500 text-white hover:bg-green-600'
-            }`}
-            disabled={isDisabled}
-          >
-            Byes
-          </button>
-          <button
-            onClick={() => handleExtra("legbyes")}
-            className={`py-2 px-4 rounded ${
-              isDisabled 
-                ? 'bg-gray-300 cursor-not-allowed' 
-                : 'bg-purple-500 text-white hover:bg-purple-600'
-            }`}
-            disabled={isDisabled}
-          >
-            Leg Byes
-          </button>
-        </div>
-        <button
-          onClick={handlePenalty}
-          className={`py-2 px-4 rounded w-full ${
-            isDisabled 
-              ? 'bg-gray-300 cursor-not-allowed' 
-              : 'bg-gray-500 text-white hover:bg-gray-600'
-          }`}
-          disabled={isDisabled}
-        >
-          Add Penalty Runs
-        </button>
-      </div>
-    );
-  };
-
-  const WicketSelector = ({ onWicket }) => {
-    const [wicketType, setWicketType] = useState("bowled");
-    const [runs, setRuns] = useState(0);
-    const [extras, setExtras] = useState({});
-    const [fielder, setFielder] = useState(null);
-    const isDisabled = !batsmen.striker || !batsmen.nonStriker || !bowler;
-
-    const handleSubmit = () => {
-      if (isDisabled) {
-        alert("Please select both batsmen and bowler before recording a wicket");
-        return;
-      }
-      
-      onWicket({
-        type: wicketType,
-        runs: safeNumber(runs, 0),
-        extras: Object.keys(extras).length > 0 ? {
-          wide: safeNumber(extras.wide, 0),
-          noball: safeNumber(extras.noball, 0),
-          byes: safeNumber(extras.byes, 0),
-          legbyes: safeNumber(extras.legbyes, 0),
-          penalty: safeNumber(extras.penalty, 0)
-        } : undefined,
-        fielder: wicketType === 'caught' || wicketType === 'runout' || wicketType === 'stumped' ? 
-          { name: fielder || 'Unknown' } : undefined
-      });
-      setWicketType("bowled");
-      setRuns(0);
-      setExtras({});
-      setFielder(null);
-    };
-
-    const handleExtraChange = (extraType, value) => {
-      setExtras(prev => ({
-        ...prev,
-        [extraType]: safeNumber(value, 0)
-      }));
-    };
-
-    return (
-      <div className="bg-white p-4 rounded shadow">
-        <h3 className="font-bold mb-2">Wicket Selector</h3>
-        {isDisabled && (
-          <p className="text-red-500 mb-2">Please select batsmen and bowler first</p>
-        )}
-        <div className="space-y-4">
-          <div>
-            <label className="block mb-1">Wicket Type</label>
-            <select
-              value={wicketType}
-              onChange={(e) => setWicketType(e.target.value)}
-              className="w-full p-2 border rounded"
-              disabled={isDisabled}
-            >
-              <option value="bowled">Bowled</option>
-              <option value="caught">Caught</option>
-              <option value="lbw">LBW</option>
-              <option value="runout">Run Out</option>
-              <option value="stumped">Stumped</option>
-              <option value="hitwicket">Hit Wicket</option>
-              <option value="obstructing">Obstructing the Field</option>
-            </select>
-          </div>
-
-          {(wicketType === 'caught' || wicketType === 'runout' || wicketType === 'stumped') && (
-            <div>
-              <label className="block mb-1">Fielder</label>
-              <input
-                type="text"
-                value={fielder || ""}
-                onChange={(e) => setFielder(e.target.value)}
-                className="w-full p-2 border rounded"
-                placeholder="Enter fielder name"
-                disabled={isDisabled}
-              />
-            </div>
-          )}
-
-          <div>
-            <label className="block mb-1">Runs before wicket</label>
-            <input
-              type="number"
-              value={runs}
-              onChange={(e) => setRuns(safeNumber(e.target.value, 0))}
-              className="w-full p-2 border rounded"
-              min="0"
-              disabled={isDisabled}
-            />
-          </div>
-
-          <div>
-            <label className="block mb-1">Extras (if any)</label>
-            <div className="grid grid-cols-2 gap-2">
-              <input
-                type="number"
-                placeholder="Wides"
-                value={extras.wide || ""}
-                onChange={(e) => handleExtraChange("wide", e.target.value)}
-                className="p-2 border rounded"
-                min="0"
-                disabled={isDisabled}
-              />
-              <input
-                type="number"
-                placeholder="No Balls"
-                value={extras.noball || ""}
-                onChange={(e) => handleExtraChange("noball", e.target.value)}
-                className="p-2 border rounded"
-                min="0"
-                disabled={isDisabled}
-              />
-              <input
-                type="number"
-                placeholder="Byes"
-                value={extras.byes || ""}
-                onChange={(e) => handleExtraChange("byes", e.target.value)}
-                className="p-2 border rounded"
-                min="0"
-                disabled={isDisabled}
-              />
-              <input
-                type="number"
-                placeholder="Leg Byes"
-                value={extras.legbyes || ""}
-                onChange={(e) => handleExtraChange("legbyes", e.target.value)}
-                className="p-2 border rounded"
-                min="0"
-                disabled={isDisabled}
-              />
-            </div>
-          </div>
-
-          <button
-            onClick={handleSubmit}
-            className={`py-2 px-4 rounded w-full ${
-              isDisabled 
-                ? 'bg-gray-300 cursor-not-allowed' 
-                : 'bg-red-500 text-white hover:bg-red-600'
-            }`}
-            disabled={isDisabled}
-          >
-            Record Wicket
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  const InningsControls = () => {
-    return (
-      <div className="bg-white p-4 rounded shadow space-y-4">
-        <h3 className="font-bold">Innings Controls</h3>
-        
-        {matchStatus === "in_progress" && (
-          <button
-            onClick={handleOverComplete}
-            className={`bg-blue-500 text-white py-2 px-4 rounded w-full hover:bg-blue-600 ${
-              score.balls !== 5 ? 'opacity-50 cursor-not-allowed' : ''
-            }`}
-            disabled={score.balls !== 5}
-          >
-            Complete Over
-          </button>
-        )}
-
-        {matchStatus === "in_progress" && (
-          <button
-            onClick={endInnings}
-            className="bg-green-500 text-white py-2 px-4 rounded w-full hover:bg-green-600"
-          >
-            {currentInnings === 1 ? "End 1st Innings" : "End Match"}
-          </button>
-        )}
-      </div>
-    );
-  };
-
-  const BatsmanStats = ({ batsman }) => {
-    const [stats, setStats] = useState(null);
-
-    useEffect(() => {
-      if (!matchId || !batsman || !currentInnings) return;
-
-      const statsRef = ref(db, `matches/${matchId}/innings/${currentInnings}/playerStats/${batsman.id}`);
-      const unsubscribe = onValue(statsRef, (snapshot) => {
-        if (snapshot.exists()) {
-          setStats(snapshot.val());
-        } else {
-          setStats(null);
-        }
-      });
-
-      return () => unsubscribe();
-    }, [matchId, batsman, currentInnings]);
-
-    if (!batsman) return <div className="bg-white p-4 rounded shadow">No batsman selected</div>;
-    if (!stats) return <div className="bg-white p-4 rounded shadow">Loading batsman stats...</div>;
-
-    return (
-      <div className="bg-white p-4 rounded shadow">
-        <h3 className="font-bold mb-2">{batsman.name} - Batting</h3>
-        <div className="grid grid-cols-2 gap-2">
-          <p>Runs: <span className="font-bold">{safeNumber(stats.runs)}</span></p>
-          <p>Balls: <span className="font-bold">{safeNumber(stats.balls)}</span></p>
-          <p>4s: <span className="font-bold">{safeNumber(stats.fours)}</span></p>
-          <p>6s: <span className="font-bold">{safeNumber(stats.sixes)}</span></p>
-          <p>SR: <span className="font-bold">
-            {stats.balls ? ((safeNumber(stats.runs) / safeNumber(stats.balls)) * 100).toFixed(2) : 0}
-          </span></p>
-          <p>Status: <span className="font-bold">{stats.status || "batting"}</span></p>
-        </div>
-      </div>
-    );
-  };
-
-  const BowlerStats = ({ bowler }) => {
-    const [stats, setStats] = useState(null);
-
-    useEffect(() => {
-      if (!matchId || !bowler || !currentInnings) return;
-
-      const statsRef = ref(db, `matches/${matchId}/innings/${currentInnings}/playerStats/${bowler.id}`);
-      const unsubscribe = onValue(statsRef, (snapshot) => {
-        if (snapshot.exists()) {
-          setStats(snapshot.val());
-        } else {
-          setStats(null);
-        }
-      });
-
-      return () => unsubscribe();
-    }, [matchId, bowler, currentInnings]);
-
-    if (!bowler) return <div className="bg-white p-4 rounded shadow">No bowler selected</div>;
-    if (!stats) return <div className="bg-white p-4 rounded shadow">Loading bowler stats...</div>;
-
-    return (
-      <div className="bg-white p-4 rounded shadow">
-        <h3 className="font-bold mb-2">{bowler.name} - Bowling</h3>
-        <div className="grid grid-cols-2 gap-2">
-          <p>Overs: <span className="font-bold">{(safeNumber(stats.balls) / 6).toFixed(1)}</span></p>
-          <p>Maidens: <span className="font-bold">{safeNumber(stats.maidens)}</span></p>
-          <p>Runs: <span className="font-bold">{safeNumber(stats.runs)}</span></p>
-          <p>Wickets: <span className="font-bold">{safeNumber(stats.wickets)}</span></p>
-          <p>Wides: <span className="font-bold">{safeNumber(stats.wides)}</span></p>
-          <p>No Balls: <span className="font-bold">{safeNumber(stats.noballs)}</span></p>
-          <p>Economy: <span className="font-bold">
-            {stats.balls ? ((safeNumber(stats.runs) / safeNumber(stats.balls)) * 6).toFixed(2) : 0}
-          </span></p>
-        </div>
-      </div>
-    );
-  };
+  if (gameState.isLoading) {
+    return <div className="max-w-6xl mx-auto p-4">Loading match data...</div>;
+  }
 
   return (
     <div className="max-w-6xl mx-auto p-4">
@@ -1025,7 +473,7 @@ export default function ScorerDashboard() {
       </button>
 
       <h1 className="text-2xl font-bold mb-6">
-        {match?.teamA} vs {match?.teamB} - Scorer Dashboard
+        {gameState.match?.teamA} vs {gameState.match?.teamB} - Scorer Dashboard
       </h1>
 
       <div className="mb-4 bg-white p-4 rounded shadow">
@@ -1034,15 +482,15 @@ export default function ScorerDashboard() {
             <p>Current Over: {overProgress}</p>
             <p>Match Status: 
               <span className={`font-bold ${
-                matchStatus === "in_progress" ? "text-green-500" : 
-                matchStatus === "completed" ? "text-red-500" : "text-gray-500"
+                gameState.matchStatus === "in_progress" ? "text-green-500" : 
+                gameState.matchStatus === "completed" ? "text-red-500" : "text-gray-500"
               }`}>
-                {matchStatus === "not_started" ? "Not Started" : 
-                 matchStatus === "in_progress" ? "In Progress" : "Completed"}
+                {gameState.matchStatus === "not_started" ? "Not Started" : 
+                 gameState.matchStatus === "in_progress" ? "In Progress" : "Completed"}
               </span>
             </p>
           </div>
-          {freeHit && (
+          {gameState.freeHit && (
             <div className="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-2 rounded">
               FREE HIT ACTIVE
             </div>
@@ -1050,7 +498,7 @@ export default function ScorerDashboard() {
         </div>
       </div>
 
-      {matchStatus === "not_started" && (
+      {gameState.matchStatus === "not_started" && (
         <button
           onClick={startMatch}
           className="bg-green-500 text-white px-4 py-2 rounded mb-6 hover:bg-green-600"
@@ -1059,66 +507,110 @@ export default function ScorerDashboard() {
         </button>
       )}
 
-      {matchStatus === "in_progress" && (
+      {gameState.matchStatus === "in_progress" && (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           <div className="lg:col-span-3 space-y-6">
-            <ScoreDisplay />
+            <ScoreDisplay 
+              score={gameState.score} 
+              overProgress={overProgress} 
+              batsmen={gameState.batsmen} 
+              bowler={gameState.bowler} 
+              freeHit={gameState.freeHit}
+            />
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <PlayerSelector
-                team={currentInnings === 1 ? "A" : "B"}
+                team={gameState.currentInnings === 1 ? "A" : "B"}
                 role="Striker"
                 onSelect={(player) =>
-                  setBatsmen((prev) => ({ ...prev, striker: player }))
+                  setGameState(prev => ({ ...prev, batsmen: { ...prev.batsmen, striker: player } }))
                 }
+                lastBowler={null}
+                matchId={matchId}
               />
               <PlayerSelector
-                team={currentInnings === 1 ? "A" : "B"}
+                team={gameState.currentInnings === 1 ? "A" : "B"}
                 role="Non-Striker"
                 onSelect={(player) =>
-                  setBatsmen((prev) => ({ ...prev, nonStriker: player }))
+                  setGameState(prev => ({ ...prev, batsmen: { ...prev.batsmen, nonStriker: player } }))
                 }
+                lastBowler={null}
+                matchId={matchId}
               />
             </div>
 
             <PlayerSelector
-              team={currentInnings === 1 ? "B" : "A"}
+              team={gameState.currentInnings === 1 ? "B" : "A"}
               role="Bowler"
-              onSelect={setBowler}
+              onSelect={(bowler) => setGameState(prev => ({ ...prev, bowler }))}
+              lastBowler={gameState.lastBowler}
+              matchId={matchId}
             />
 
-            <ScoreControls onScoreUpdate={handleScoreUpdate} />
-            <WicketSelector onWicket={handleWicket} />
+            <ScoreControls 
+              onScoreUpdate={handleScoreUpdate} 
+              batsmen={gameState.batsmen} 
+              bowler={gameState.bowler}
+            />
+            <WicketSelector 
+              onWicket={handleWicket} 
+              batsmen={gameState.batsmen} 
+              bowler={gameState.bowler}
+              freeHit={gameState.freeHit}
+            />
           </div>
 
           <div className="space-y-6">
-            <InningsControls />
+            <InningsControls 
+              matchStatus={gameState.matchStatus}
+              score={gameState.score}
+              currentInnings={gameState.currentInnings}
+              onOverComplete={handleOverComplete}
+              onEndInnings={endInnings}
+            />
 
-            {batsmen.striker && (
-              <BatsmanStats batsman={batsmen.striker} />
+            {gameState.batsmen.striker && (
+              <BatsmanStats 
+                matchId={matchId}
+                batsmanId={gameState.batsmen.striker.id}
+                currentInnings={gameState.currentInnings}
+                onStrikeChange={() => {
+                  setGameState(prev => ({
+                    ...prev,
+                    batsmen: {
+                      striker: prev.batsmen.nonStriker,
+                      nonStriker: prev.batsmen.striker
+                    }
+                  }));
+                }}
+              />
             )}
 
-            {bowler && (
-              <BowlerStats bowler={bowler} />
+            {gameState.bowler && (
+              <BowlerStats 
+                bowler={gameState.bowler} 
+                matchId={matchId} 
+                currentInnings={gameState.currentInnings}
+              />
             )}
 
-            <BallHistory />
+            <BallHistory balls={gameState.balls} />
           </div>
         </div>
       )}
 
-      {matchStatus === "completed" && (
+      {gameState.matchStatus === "completed" && (
         <div className="bg-white p-4 rounded shadow">
           <h2 className="text-xl font-bold mb-4">Match Completed</h2>
           <p>Final Score:</p>
           <div className="grid grid-cols-2 gap-4 mt-4">
             <div className="border p-4 rounded">
-              <h3 className="font-bold">{match?.teamA}</h3>
-              <p>{score.runs}/{score.wickets} ({overProgress} overs)</p>
+              <h3 className="font-bold">{gameState.match?.teamA}</h3>
+              <p>{gameState.score.runs}/{gameState.score.wickets} ({overProgress} overs)</p>
             </div>
             <div className="border p-4 rounded">
-              <h3 className="font-bold">{match?.teamB}</h3>
-              <p>{score.runs}/{score.wickets} ({overProgress} overs)</p>
+              <h3 className="font-bold">{gameState.match?.teamB}</h3>
+              <p>{gameState.score.runs}/{gameState.score.wickets} ({overProgress} overs)</p>
             </div>
           </div>
         </div>
